@@ -142,6 +142,12 @@ def test_sell_now_after_sell_by_and_unlisted():
     assert "no listings — list at target " + fmt_money(15000) in h
 
 
+def test_sell_by_shows_date_and_time_and_days_one_decimal():
+    h = state_html(seed(":memory:", [replace(mkpick(), days=2.5)]))
+    assert "Sell by Sat 14 Nov 12:00 UTC" in h and "~2.5 days" in h
+    assert "sell by Thu 12 Nov 12:00 UTC" in sell_html(8000, NOW + timedelta(days=1))
+
+
 def test_blackwater_holding_uses_blackwater_price_and_cut():
     # break-even at 15% cut is 11765 > 11000, so wait; the 5% cut would have said list
     h = sell_html(11000, NOW + timedelta(days=1), house="blackwater", cut=0.15)

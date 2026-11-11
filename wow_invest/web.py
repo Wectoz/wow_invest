@@ -76,6 +76,10 @@ def _hm(d: datetime) -> str:
     return d.astimezone(UTC).strftime("%H:%M UTC")
 
 
+def _dhm(d: datetime) -> str:
+    return d.astimezone(UTC).strftime("%a %d %b %H:%M UTC")
+
+
 def sell_advice(h, current: int | None, cut: float, dep: int, now: datetime) -> tuple[str, int | None]:
     """kind: nolist | wait | list | loss. Price is per unit."""
     if current is None:
@@ -171,14 +175,14 @@ def _pick_row(p, rank=None, form=True, check=False, dim=False) -> str:
     label, tcls = KINDS.get(p.kind, (p.kind, ""))
     unf = " unfunded" if dim and not p.funded else ""
     note = '<span class="note">not enough gold</span>' if unf else ""
-    sb = f"<p>Sell by {_hm(p.sell_by)}</p>" if p.sell_by else ""
+    sb = f"<p>Sell by {_dhm(p.sell_by)}</p>" if p.sell_by else ""
     if check:
         side = '<form method="post" action="/vendor-confirm"><input type="hidden" name="item_id" value="%s">' \
                '<button>A vendor sells this</button></form>' % esc(p.item_id)
         body = ""
     else:
         side = (f'{p.qty} × {fmt_money(p.max_unit_price)} → {fmt_money(p.sell_price)}<br>'
-                f'<span class="profit">+{fmt_money(p.profit)}</span> · ~{p.days:.0f} days · sure '
+                f'<span class="profit">+{fmt_money(p.profit)}</span> · ~{p.days:.1f} days · sure '
                 f'<span class="conf"><i style="width:{int(p.sure * 100)}%"></i></span>')
         trend = "trend unknown" if p.trend is None else f"price {p.trend * 100:+.0f}% vs a day ago"
         body = (f'<details><summary>Why</summary><p>{esc(p.reason)}</p>'
@@ -205,7 +209,7 @@ def _held_row(v) -> str:
     else:
         adv = f'list at {fmt_money(v["price"])}'
     adv = now_p + adv if v["kind"] != "nolist" else adv
-    sb = f' · sell by {_hm(h.sell_by)}' if h.sell_by else ""
+    sb = f' · sell by {_dhm(h.sell_by)}' if h.sell_by else ""
     return (f'<div class="held"><div class="row"><div></div>{_ico(v["icon"], v["quality"])}'
             f'<div><span class="name {_qcls(v["quality"])}">{_name(h.item_id, v["name"])}</span>'
             f'<span class="tag">{esc(KINDS.get(h.kind, (h.kind,))[0])}</span><span class="tag">{esc(HOUSE.get(h.sell_at, h.sell_at))}</span>'
