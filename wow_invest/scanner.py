@@ -26,7 +26,8 @@ def _choose(conn, rows, deal_ids, crowd, now):
 
     def cheap_static(r):
         s = db.static(conn, r.item_id)
-        return s is not None and s["static_done"] == 1 and 0 < s["purchase_price"] <= r.min_ask / c.VENDOR_CHECK_RATIO
+        return (s is not None and s["static_done"] == 1 and s["purchase_price"] > 0
+                and s["purchase_price"] / (s["purchase_quantity"] or 1) <= r.min_ask / c.VENDOR_CHECK_RATIO)
 
     def flooded(r):
         band, old = item_band(r.item_id, r.required_level), prev.get(r.item_id, (None, 0, 0))[1]
@@ -59,15 +60,18 @@ def _choose(conn, rows, deal_ids, crowd, now):
 def run_cycle(client, conn, now) -> str:
     try:
         times = client.scan_times()
-        if any(h not in times for h in HOUSES):
-            return "error"
-        if all(times[h][0] == db.last_captured(conn, h) for h in HOUSES):
-            return "no-change"
+        # a list, not a lazy any(), so both houses are checked: a missing house (KeyError) or a missing,
+        # malformed or naive auctions_at costs this one request, not both lists
+        stale = any([datetime.fromisoformat(times[h][1]) < now - timedelta(hours=c.STALE_HOURS) for h in HOUSES])
+    except (ApiError, KeyError, TypeError, ValueError):
+        return "error"
+    if all(times[h][0] == db.last_captured(conn, h) for h in HOUSES):
+        return "no-change"
+    try:
         rows = {h: client.all_items(h) for h in HOUSES}
         deals = {h: client.deals(h) for h in HOUSES}
     except ApiError:
         return "error"
-    stale = any(datetime.fromisoformat(times[h][1]) < now - timedelta(hours=c.STALE_HOURS) for h in HOUSES)
     cut = {h: deals[h][1] for h in HOUSES}
     scan_id = {h: db.save_scan(conn, h, *times[h], cut[h], rows[h]) for h in HOUSES}
     db.set_setting(conn, "stale", "1" if stale else "0")
@@ -75,33 +79,30 @@ def run_cycle(client, conn, now) -> str:
         tracker.judge(conn, now)
         return "stale"
 
-    cache, bad, errors = {}, [], 0
+    cache, errors = {}, 0
 
-    def detail(house, item_id):
-        """Cached detail, or None on an ApiError. A static id that failed is marked bad only once a
-        later request succeeds, so a short outage never blacklists items."""
+    def detail(house, item_id, static=False):
+        """Cached detail, or None on an ApiError. Only transient errors count toward the outage
+        streak; a permanent one on a static id marks it bad."""
         nonlocal errors
         key = (house, item_id)
         if key not in cache:
+            cache[key] = None
             try:
-                cache[key] = client.item_detail(house, item_id, cut[house])
-            except ApiError:
-                cache[key], errors = None, errors + 1
-                if errors >= c.MAX_ERRORS_IN_ROW:
-                    raise _Outage
-                return None
-            errors = 0
-            for i in bad:
-                db.mark_static_bad(conn, i)
-            bad.clear()
+                cache[key], errors = client.item_detail(house, item_id, cut[house]), 0
+            except ApiError as e:
+                if e.transient:
+                    errors += 1
+                    if errors >= c.MAX_ERRORS_IN_ROW:
+                        raise _Outage from e
+                elif static:
+                    db.mark_static_bad(conn, item_id)
         return cache[key]
 
     try:
         for i in db.missing_static(conn, c.STATIC_PER_CYCLE):
-            d = detail("alliance", i)
-            if d is None:
-                bad.append(i)
-            else:
+            d = detail("alliance", i, static=True)
+            if d is not None:
                 db.save_static(conn, d)
 
         crowd = estimate_crowd(rows["alliance"])
@@ -111,18 +112,19 @@ def run_cycle(client, conn, now) -> str:
         held, confirmed, picks = db.held_units(conn), db.confirmed_vendors(conn), []
         for kind, house, r, buy_house in _choose(conn, rows, deals["alliance"][0], crowd, now):
             sell, h = detail(house, r.item_id), held.get(r.item_id, 0)
-            if sell is None:
+            # only a cross buys on another house; the rest buy where they sell
+            buy = detail(buy_house, r.item_id) if kind == "cross" and sell is not None else sell
+            if sell is None or buy is None:
                 continue
-            if kind == "cross":
-                buy = detail(buy_house, r.item_id)
-                if buy is not None:
-                    picks.append(cross_flip(r, buy, sell, h, now))
-            elif kind == "hold":
-                picks.append(hold(r, sell, crowd, h, now))
-            else:  # vendor and flip candidates sell on Alliance; a flip also tries a vendor buy
-                picks.append(vendor_flip(r, sell, h, confirmed, now))
-                if kind == "flip":
-                    picks.append(quick_flip(r, sell, h, now))
+            try:
+                new = [cross_flip(r, buy, sell, h, now)] if kind == "cross" else []
+                if house == "alliance":  # every builder that sells on Alliance: never hide a buy
+                    new += [quick_flip(r, sell, h, now), vendor_flip(r, sell, h, confirmed, now),
+                            hold(r, sell, crowd, h, now)]
+            except Exception:
+                log.exception("pick builders failed for item %s", r.item_id)
+                continue
+            picks += new
     except _Outage:
         return "error"
 

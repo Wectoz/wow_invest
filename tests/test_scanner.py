@@ -23,22 +23,26 @@ def row(item_id, min_ask=20000, sold=20, units=300):
                listings=1, sold_24h=sold, vendor_sell=None)
 
 
-def detail(item_id, series=steady, ladder=(), purchase_price=0):
+def detail(item_id, series=steady, ladder=(), purchase_price=0, purchase_quantity=1):
     return Detail(item_id=item_id, house="alliance", ladder=list(ladder), series=series, cut=0.0,
-                  purchase_price=purchase_price, purchase_quantity=1, sell_price=0, required_level=None)
+                  purchase_price=purchase_price, purchase_quantity=purchase_quantity, sell_price=0,
+                  required_level=None)
 
 
 class FakeClient:
-    """Fixture site. `fail` holds houses (all_items raises), item ids, or "details" (every detail raises)."""
+    """Fixture site. `fail` raises a transient ApiError for: "scan_times", "deals", a house (its
+    all_items), an item id, or "details" (every detail). Item ids in `gone` raise a permanent one."""
 
-    def __init__(self, alliance, blackwater=(), deals=(), details=None, fail=()):
+    def __init__(self, alliance, blackwater=(), deals=(), details=None, fail=(), gone=()):
         self.rows = {"alliance": list(alliance), "blackwater": list(blackwater)}
-        self.deal_ids, self.details, self.fail = list(deals), details or {}, set(fail)
+        self.deal_ids, self.details, self.fail, self.gone = list(deals), details or {}, set(fail), set(gone)
         self.times = {h: (NOW.isoformat(), NOW.isoformat()) for h in CUT}
         self.calls, self.fetched = Counter(), []
 
     def scan_times(self):
         self.calls["scan_times"] += 1
+        if "scan_times" in self.fail:
+            raise ApiError("markets")
         return dict(self.times)
 
     def all_items(self, house):
@@ -49,11 +53,15 @@ class FakeClient:
 
     def deals(self, house, limit=100):
         self.calls["deals"] += 1
+        if "deals" in self.fail:
+            raise ApiError("deals")
         return (self.deal_ids if house == "alliance" else []), CUT[house]
 
     def item_detail(self, house, item_id, cut):
         self.calls["item_detail"] += 1
         self.fetched.append((house, item_id))
+        if item_id in self.gone:
+            raise ApiError(item_id, transient=False)
         if item_id in self.fail or "details" in self.fail:
             raise ApiError(item_id)
         return replace(self.details.get((house, item_id), detail(item_id)), house=house, cut=cut)
@@ -83,15 +91,21 @@ def test_no_change_when_captured_at_unchanged():
     assert fc.calls["all_items"] == calls
 
 
-def test_error_before_save_leaves_db_untouched():
+@pytest.mark.parametrize("failing", ["blackwater", "deals", "scan_times"])
+def test_error_before_save_leaves_db_untouched(failing):
     conn = db.connect(":memory:")
-    assert run_cycle(flip_client(fail={"blackwater"}), conn, NOW) == "error"
+    assert run_cycle(flip_client(fail={failing}), conn, NOW) == "error"
     assert count(conn, "scans") == 0 and count(conn, "items") == 0
 
 
-def test_missing_house_is_an_error():
+@pytest.mark.parametrize("auctions_at", ["missing house", "garbage", None, "2026-11-11T12:00:00"])
+def test_bad_markets_payload_is_an_error_before_any_list(auctions_at):
     conn, fc = db.connect(":memory:"), flip_client()
-    del fc.times["blackwater"]
+    fc.times["alliance"] = (NOW.isoformat(), (NOW - timedelta(hours=3)).isoformat())  # stale: Blackwater still checked
+    if auctions_at == "missing house":
+        del fc.times["blackwater"]
+    else:
+        fc.times["blackwater"] = (NOW.isoformat(), auctions_at)
     assert run_cycle(fc, conn, NOW) == "error"
     assert fc.calls["all_items"] == 0 and count(conn, "scans") == 0
 
@@ -167,7 +181,54 @@ def test_one_bad_item_is_skipped_not_fatal():
     conn = db.connect(":memory:")
     fc = FakeClient([row(i, sold=100 - k) for k, i in enumerate(ids)], fail=set(ids[::2]))
     assert run_cycle(fc, conn, NOW) == "done"  # each success resets the error streak
-    assert [db.static(conn, i)["static_done"] for i in ids] == [-1, 1, -1, 1, -1, 1]
+    # a transient failure is retried next cycle, never marked bad
+    assert [db.static(conn, i)["static_done"] for i in ids] == [0, 1, 0, 1, 0, 1]
+
+
+def test_permanent_errors_do_not_block_cycle():
+    gone = [100002, 100003, 100004]
+    conn, fc = db.connect(":memory:"), flip_client(gone=gone)
+    fc.rows["alliance"] += [row(i, sold=50) for i in gone]  # backfilled first, all in a row
+    assert run_cycle(fc, conn, NOW) == "done"
+    assert [db.static(conn, i)["static_done"] for i in gone] == [-1, -1, -1]
+    assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("flip", FLIP)]
+
+
+def test_isolated_candidate_fetch_error_skips_that_candidate(monkeypatch):
+    monkeypatch.setattr(config, "STATIC_PER_CYCLE", 0)  # the error happens in the candidate step
+    other = 100002
+    fc = FakeClient([row(FLIP), row(other, sold=50)], deals=[FLIP, other], fail={other},
+                    details={("alliance", i): detail(i, ladder=WALL) for i in (FLIP, other)})
+    conn = db.connect(":memory:")
+    assert run_cycle(fc, conn, NOW) == "done"
+    assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("flip", FLIP)]
+
+
+def test_vendor_candidate_still_gets_quick_flip():
+    # not a deal: a candidate only because 25000 per 5 is at most half its 20000 min_ask
+    item = 100002
+    fc = FakeClient([row(item)], details={
+        ("alliance", item): detail(item, ladder=WALL, purchase_price=25000, purchase_quantity=5)})
+    conn = db.connect(":memory:")
+    assert run_cycle(fc, conn, NOW) == "done"
+    assert sorted(p.kind for p in db.load_candidates(conn)[0]) == ["flip", "vendor_check"]
+
+
+def test_builder_crash_skips_only_that_candidate(monkeypatch, caplog):
+    other, real = 100002, scanner.quick_flip
+
+    def flaky(r, d, held, now):
+        if r.item_id == other:
+            raise ValueError("bad data")
+        return real(r, d, held, now)
+
+    monkeypatch.setattr(scanner, "quick_flip", flaky)
+    fc = FakeClient([row(FLIP), row(other, sold=50)], deals=[FLIP, other],
+                    details={("alliance", i): detail(i, ladder=WALL) for i in (FLIP, other)})
+    conn = db.connect(":memory:")
+    assert run_cycle(fc, conn, NOW) == "done"
+    assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("flip", FLIP)]
+    assert "ValueError: bad data" in caplog.text
 
 
 def test_slow_sellers_are_not_candidates():
@@ -201,7 +262,7 @@ def test_records_only_showable_picks():
     conn = db.connect(":memory:")
     assert run_cycle(fc, conn, NOW) == "done"
     picks = db.load_candidates(conn)[0]
-    # `check` is a deal too, but as a vendor candidate it is not a flip candidate as well
+    # `check` is a deal too, but it is chosen once (as a vendor candidate), so its vendor_check is not doubled
     assert sorted((p.kind, p.item_id) for p in picks) == [("flip", FLIP), ("flip", small), ("vendor_check", check)]
     assert [p.score for p in picks] == sorted((p.score for p in picks), reverse=True)
     assert recorded(conn) == [("flip", FLIP)]

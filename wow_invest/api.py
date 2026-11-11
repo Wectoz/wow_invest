@@ -10,7 +10,9 @@ from .models import Detail, Point, Row
 
 
 class ApiError(Exception):
-    pass
+    def __init__(self, msg="", transient=True):
+        super().__init__(msg)
+        self.transient = transient  # False: retrying will not help (4xx, wrong shape)
 
 
 def _fetch(url, headers):
@@ -51,7 +53,7 @@ def _shaped(fn):
         try:
             return fn(self, *a, **k)
         except (KeyError, TypeError, ValueError, AttributeError) as e:
-            raise ApiError(f"unexpected response in {fn.__name__}{a}: {e!r}") from e
+            raise ApiError(f"unexpected response in {fn.__name__}{a}: {e!r}", transient=False) from e
     return wrap
 
 
@@ -74,7 +76,7 @@ class Client:
             except urllib.error.HTTPError as e:
                 self._last = self._clock()
                 if e.code == 404 or not (e.code == 429 or e.code >= 500):
-                    raise ApiError(f"HTTP {e.code} for {path}") from e
+                    raise ApiError(f"HTTP {e.code} for {path}", transient=False) from e
                 ra = e.headers.get("Retry-After") if e.headers else None
                 retry_after = int(ra) if ra and ra.isdigit() else None
                 err = e

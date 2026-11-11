@@ -64,9 +64,9 @@ def test_get_json_retries_5xx_then_succeeds():
 
 def test_get_json_raises_after_three_failures():
     c, f, _ = client(b"no", b"no", b"no", b"no")
-    with pytest.raises(ApiError):
+    with pytest.raises(ApiError) as e:
         c.get_json("/x")
-    assert len(f.calls) == 4
+    assert len(f.calls) == 4 and e.value.transient is True  # unparsable JSON may be a hiccup
 
 
 def test_get_json_retries_urlerror():
@@ -74,11 +74,19 @@ def test_get_json_retries_urlerror():
     assert c.get_json("/x") == {"ok": 1}
 
 
-def test_get_json_404_raises_without_retry():
-    c, f, _ = client(http(404))
-    with pytest.raises(ApiError):
+@pytest.mark.parametrize("code", [404, 400])
+def test_get_json_4xx_raises_without_retry_and_is_permanent(code):
+    c, f, _ = client(http(code))
+    with pytest.raises(ApiError) as e:
         c.get_json("/x")
-    assert len(f.calls) == 1
+    assert len(f.calls) == 1 and e.value.transient is False
+
+
+def test_get_json_5xx_after_retries_is_transient():
+    c, f, _ = client(*[http(503)] * 4)
+    with pytest.raises(ApiError) as e:
+        c.get_json("/x")
+    assert len(f.calls) == 4 and e.value.transient is True
 
 
 def test_all_items_pages_until_total():
@@ -120,8 +128,9 @@ def test_requests_send_generic_user_agent():
 
 def test_wrong_shape_items_response_is_api_error():
     c, _, _ = client({"error": "x"})
-    with pytest.raises(ApiError):
+    with pytest.raises(ApiError) as e:
         c.all_items("alliance")
+    assert e.value.transient is False
 
 
 def test_item_detail_bad_timestamp_is_api_error():
