@@ -100,6 +100,13 @@ def test_render_unfunded_rows_marked():
     assert "not enough gold" not in state_html(seed(":memory:", [mkpick()]))
 
 
+def test_pick_bought_after_the_scan_is_hidden_until_the_next_scan():
+    c = seed(":memory:", [mkpick(1), mkpick(2)], captured=NOW - timedelta(minutes=30))
+    db.add_holding(c, 1, "flip", 5, 195000, 60000, NOW - timedelta(minutes=10), None)  # after the scan
+    db.add_holding(c, 2, "flip", 5, 195000, 60000, NOW - timedelta(hours=1), None)  # the scan counted it
+    assert [p.item_id for p in build_state(c, NOW)["plan"].ranked] == [2]
+
+
 def test_bought_form_defaults():
     h = state_html(seed(":memory:", [mkpick()]))
     assert 'name="price_paid" value="19g 50s"' in h and 'name="target" value="60000"' in h

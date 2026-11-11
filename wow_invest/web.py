@@ -91,6 +91,9 @@ def sell_advice(h, current: int | None, cut: float, dep: int, now: datetime) -> 
 def build_state(conn, now: datetime) -> dict:
     cands, captured = db.load_candidates(conn)
     holdings = db.open_holdings(conn)
+    # the scan already capped for holdings bought before it; one bought since makes its pick out of date
+    since = {h.item_id for h in holdings if captured and h.bought_at > _aware(captured)}
+    fresh = [p for p in cands if p.item_id not in since]
     stats = db.hit_stats(conn)
     ali = db.latest_scan(conn, "alliance")
     houses: dict[str, tuple] = {}
@@ -108,7 +111,7 @@ def build_state(conn, now: datetime) -> dict:
         held.append({"h": h, "name": it["name"] if it else None, "icon": it["icon"] if it else None,
                      "quality": it["quality"] if it else None, "current": cur,
                      "kind": kind, "price": price, "loss": loss})
-    p = plan(cands, db.get_gold(conn), holdings, holds_proven(stats))
+    p = plan(fresh, db.get_gold(conn), holdings, holds_proven(stats))
     oldest = conn.execute("SELECT min(captured_at) FROM scans WHERE house='alliance'").fetchone()[0]
     history_ok = bool(oldest) and now - _aware(oldest) >= timedelta(hours=C.MIN_HISTORY_HOURS)
     last_ok = _aware(captured) or (_aware(ali["captured_at"]) if ali else None)
