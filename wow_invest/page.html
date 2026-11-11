@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="300">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wow_invest</title>
+<link rel="stylesheet" href="$css_href">
+</head><body><main>
+$banners
+<div class="frame">
+  <div class="top"><h1>wow_invest</h1><div class="sub">$sub</div></div>
+  <div class="stats">
+    <div class="stat"><div class="k">Your gold</div><div class="v">
+      <form class="goldform" method="post" action="/gold"><input type="text" name="gold" value="$gold_text" aria-label="Your gold"><button>Set</button></form></div></div>
+    <div class="stat"><div class="k">Suggested spend</div><div class="v">$spend</div></div>
+    <div class="stat"><div class="k">Expected profit</div><div class="v profit">+$profit</div></div>
+    <div class="stat"><div class="k">Crowd is around</div><div class="v">$crowd</div></div>
+    <div class="stat"><div class="k">Last scan</div><div class="v">$last_scan</div></div>
+    <div class="stat"><div class="k">Hit rate</div><div class="v">$hit_rate</div></div>
+  </div>
+</div>
+<div class="frame"><div class="sect">Buy in this order</div>$buy</div>
+<div class="frame"><div class="sect">Sell now</div>$sell</div>
+<div class="frame"><div class="sect">On paper (not proven yet, do not spend real gold)</div>$paper</div>
+<div class="frame"><div class="sect">Check a vendor</div>$checks</div>
+</main></body></html>

@@ -133,3 +133,12 @@ def test_confirmed_vendors():
     db.confirm_vendor(c, 4)
     db.confirm_vendor(c, 4)
     assert db.confirmed_vendors(c) == {4}
+
+
+def test_latest_scan():
+    c = conn()
+    assert db.latest_scan(c, "alliance") is None
+    db.save_scan(c, "alliance", iso(NOW - timedelta(hours=1)), iso(NOW), 0.05, [row()])
+    db.save_scan(c, "alliance", iso(NOW), iso(NOW), 0.07, [row()])
+    r = db.latest_scan(c, "alliance")
+    assert r["captured_at"] == iso(NOW) and r["cut"] == 0.07

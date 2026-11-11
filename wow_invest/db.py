@@ -79,6 +79,11 @@ def set_scan_crowd(conn, scan_id, crowd: tuple[int, int]):
         conn.execute("UPDATE scans SET crowd=? WHERE id=?", (f"{crowd[0]}-{crowd[1]}", scan_id))
 
 
+def latest_scan(conn, house) -> sqlite3.Row | None:
+    return conn.execute("SELECT captured_at, auctions_at, cut FROM scans WHERE house=? "
+                        "ORDER BY captured_at DESC LIMIT 1", (house,)).fetchone()
+
+
 def rows_at(conn, house, hours_ago: float, now) -> dict[int, tuple[int | None, int, int]]:
     cutoff = _iso(now - timedelta(hours=hours_ago))
     s = conn.execute("SELECT id FROM scans WHERE house=? AND captured_at<=? "
