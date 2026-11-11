@@ -1,11 +1,13 @@
 import json
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from wow_invest.config import PROVEN_RECENT
 from wow_invest.models import Detail, Holding, Pick, Row
+
+_PICK_FIELDS = {f.name for f in fields(Pick)}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scans(id INTEGER PRIMARY KEY, house TEXT, captured_at TEXT,
@@ -186,8 +188,12 @@ def load_candidates(conn) -> tuple[list[Pick], str | None]:
     raw = get_setting(conn, "candidates")
     if not raw:
         return [], None
-    d = json.loads(raw)
-    return [Pick(**{**p, "sell_by": _dt(p["sell_by"])}) for p in d["picks"]], d["captured_at"]
+    try:  # saved by an older version: drop unknown keys, let defaults fill the rest, give up on missing ones
+        d = json.loads(raw)
+        return [Pick(**{**{k: v for k, v in p.items() if k in _PICK_FIELDS}, "sell_by": _dt(p.get("sell_by"))})
+                for p in d["picks"]], d["captured_at"]
+    except (KeyError, TypeError, ValueError):
+        return [], None
 
 
 def record_picks(conn, picks: list[Pick], now) -> int:

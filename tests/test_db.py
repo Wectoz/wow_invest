@@ -1,3 +1,5 @@
+import json
+from dataclasses import asdict
 from datetime import timedelta
 
 from tests.conftest import NOW
@@ -98,6 +100,18 @@ def test_candidates_roundtrip_preserves_datetimes():
     got, at = db.load_candidates(c)
     assert got == ps and at == iso(NOW)
     assert got[0].sell_by == NOW and got[1].sell_by is None and got[0].funded is True
+
+
+def test_load_candidates_tolerates_an_older_pick_shape():
+    c = conn()
+    old = {**asdict(pick(1)), "retired_field": 1}
+    del old["funded"], old["listed"], old["sell_by"]  # fields with defaults
+    db.set_setting(c, "candidates", json.dumps({"captured_at": iso(NOW), "picks": [old]}))
+    (got,), at = db.load_candidates(c)
+    assert (got.item_id, got.sell_by, got.funded, got.listed, at) == (1, None, False, 0, iso(NOW))
+    del old["profit"]  # a required field is missing
+    db.set_setting(c, "candidates", json.dumps({"captured_at": iso(NOW), "picks": [old]}))
+    assert db.load_candidates(c) == ([], None)
 
 
 def test_hit_stats_counts_recent_holds_items_and_days():
