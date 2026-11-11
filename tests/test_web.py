@@ -180,12 +180,16 @@ def test_paper_rows_not_marked_unfunded_but_ranked_are():
         "do not spend real gold", "")
 
 
-def test_paper_hit_rate_shown():
+def test_hit_rate_is_labelled_price_held_at_target():
     c = seed(":memory:")
-    assert "Hold hit rate: none judged yet" in state_html(c)
+    h = state_html(c)
+    assert "Holds, price held at target: none judged yet" in h and "hit rate" not in h.lower()
     st = build_state(c, NOW)
-    st["stats"] = {**st["stats"], "hold_judged": 10, "hold_hits": 7}
-    assert "7 of 10 hit (70%)" in render_page(st)
+    st["stats"] = {**st["stats"], "judged": 8, "hits": 6, "hold_judged": 10, "hold_hits": 7}
+    h = render_page(st)
+    assert '<div class="k">Price held at target</div><div class="v">6 of 8 (75%)</div>' in h
+    assert "Holds, price held at target: 7 of 10 (70%)" in h
+    assert h.count("Counts picks whose price held at the target for 3 scans; it does not prove they sold.") == 1
 
 
 def test_labels_header_trend_depth():

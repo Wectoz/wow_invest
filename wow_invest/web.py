@@ -239,12 +239,12 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     age = (f'AH data from {_hm(state["auctions_at"])} ({state["data_age_min"]} min old)'
            if state["auctions_at"] else "No AH data yet")
     nxt = f' · next scan about {_hm(state["next_scan"])}' if state["next_scan"] else ""
-    hit = f'{st["hits"] * 100 // st["judged"]}% of {st["judged"]} judged' if st["judged"] else "none judged yet"
+    hit = f'{st["hits"]} of {st["judged"]} ({st["hits"] * 100 // st["judged"]}%)' if st["judged"] else "none judged yet"
     last = _hm(state["last_scan"]) if state["last_scan"] else "never"
     return Template((HERE / "page.html").read_text(encoding="utf-8")).substitute(
         css_href=esc(css_href), banners="".join(ban),
         sub=f'Alliance · Normal (PvE) · EU — Alliance AH + Blackwater AH — {esc(age)}{esc(nxt)}',
-        paper_rate=esc(f'{st["hold_hits"]} of {st["hold_judged"]} hit ({st["hold_hits"] * 100 // st["hold_judged"]}%)'
+        paper_rate=esc(f'{st["hold_hits"]} of {st["hold_judged"]} ({st["hold_hits"] * 100 // st["hold_judged"]}%)'
                        if st["hold_judged"] else "none judged yet"),
         gold_text=esc(plain_gold(state["gold"])), spend=fmt_money(p.spend), profit=fmt_money(p.profit),
         crowd=f'lvl {esc(state["crowd"])}' if state["crowd"] else "unknown",
