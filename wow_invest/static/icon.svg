@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="35%" r="70%">
+      <stop offset="0" stop-color="#3a2b18"/>
+      <stop offset="1" stop-color="#14100b"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f0d08a"/>
+      <stop offset="0.5" stop-color="#c59e60"/>
+      <stop offset="1" stop-color="#6b4a22"/>
+    </linearGradient>
+    <radialGradient id="coin" cx="40%" cy="35%" r="70%">
+      <stop offset="0" stop-color="#ffe9a8"/>
+      <stop offset="0.55" stop-color="#e3b44a"/>
+      <stop offset="1" stop-color="#8a5f1c"/>
+    </radialGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="44" fill="url(#bg)" stroke="url(#rim)" stroke-width="12"/>
+  <!-- coin stack -->
+  <g stroke="#5a3d14" stroke-width="4">
+    <ellipse cx="104" cy="186" rx="58" ry="17" fill="#b98a34"/>
+    <rect x="46" y="166" width="116" height="20" fill="#b98a34" stroke="none"/>
+    <ellipse cx="104" cy="166" rx="58" ry="17" fill="url(#coin)"/>
+    <ellipse cx="104" cy="146" rx="58" ry="17" fill="#b98a34"/>
+    <rect x="46" y="126" width="116" height="20" fill="#b98a34" stroke="none"/>
+    <ellipse cx="104" cy="126" rx="58" ry="17" fill="url(#coin)"/>
+  </g>
+  <!-- rising arrow -->
+  <polyline points="70,104 112,70 140,90 196,44" fill="none" stroke="#7fd05a" stroke-width="16"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <polygon points="214,28 214,78 166,34" fill="#7fd05a"/>
+</svg>

@@ -332,6 +332,8 @@ class Handler(BaseHTTPRequestHandler):
             self._page()
         elif path == "/static/style.css":
             self._send(200, (HERE / "static" / "style.css").read_bytes(), "text/css; charset=utf-8")
+        elif path == "/favicon.ico":
+            self._send(200, (HERE / "static" / "favicon.ico").read_bytes(), "image/x-icon")
         else:
             self._send(404, "not found")
 

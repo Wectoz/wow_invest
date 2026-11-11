@@ -319,3 +319,12 @@ def test_bought_rejects_unknown_sell_house(server):
             "sell_at": "evil"}
     code, body = req(base + "/bought", form)
     assert code == 400 and "Unknown sell house" in body
+
+
+def test_app_icon_served_and_linked(server):
+    _, base, _ = server
+    with urllib.request.urlopen(base + "/favicon.ico") as r:
+        assert r.status == 200 and r.headers["Content-Type"] == "image/x-icon"
+        assert r.read()[:4] == b"\x00\x00\x01\x00"  # ICO header
+    code, body = req(base + "/")
+    assert code == 200 and '<link rel="icon" href="/favicon.ico">' in body and "<title>WoW Invest</title>" in body
