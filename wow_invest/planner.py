@@ -36,10 +36,12 @@ def _fit(p: Pick, limit: int) -> Pick:
 
 
 def plan(candidates: list[Pick], gold: int, holdings: list[Holding], proven: bool) -> Plan:
-    cands = best_per_item([p for p in candidates if p.profit >= C.MIN_PROFIT])
-    checks = [p for p in cands if p.kind == "vendor_check"]
-    paper = [p for p in cands if p.kind == "hold" and not proven]
-    pool = [p for p in cands if p.kind != "vendor_check" and not (p.kind == "hold" and not proven)]
+    cands = [p for p in candidates if p.profit >= C.MIN_PROFIT]
+    is_paper = lambda p: p.kind == "hold" and not proven
+    pool = best_per_item([p for p in cands if p.kind != "vendor_check" and not is_paper(p)])
+    taken = {p.item_id for p in pool}  # a paper hold or check must not hide a buy
+    paper = [p for p in best_per_item([p for p in cands if is_paper(p)]) if p.item_id not in taken]
+    checks = [p for p in best_per_item([p for p in cands if p.kind == "vendor_check"]) if p.item_id not in taken]
     ranked, paper, checks = _top(pool, C.TOP_N), _top(paper, C.TOP_N), _top(checks, C.CHECKS_N)
 
     open_hold = sum(h.price_paid for h in holdings if h.kind == "hold" and h.sold_at is None)

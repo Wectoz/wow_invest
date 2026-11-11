@@ -39,7 +39,7 @@ def test_funds_top_down_and_partially_fills_next():
 
 def test_partial_fill_below_min_profit_stays_unfunded():
     b = pk(qty=10, cost=1_000_000, profit=400_000)
-    out = plan([b], 200_000, [], False)  # 2 units -> profit 80000... use tiny gold
+    out = plan([b], 200_000, [], False)  # 2 units -> profit 80000 >= MIN, funded
     assert out.ranked[0].funded
     out = plan([b], 50_000, [], False)  # 0 units
     p = out.ranked[0]
@@ -90,3 +90,19 @@ def test_best_per_item_keeps_highest_score():
     assert best_per_item([a, b, c]) == [b, c]
     t1, t2 = pk(item_id=7, score=1.0), pk("cross", 7, score=1.0)
     assert best_per_item([t1, t2]) == [t1]
+
+
+def test_paper_hold_does_not_hide_flip_for_same_item():
+    out = plan([pk("hold", 5, score=9.0), pk("flip", 5, score=1.0)], 10**9, [], False)
+    assert [p.kind for p in out.ranked] == ["flip"] and not out.paper
+
+
+def test_vendor_check_does_not_hide_flip_for_same_item():
+    out = plan([pk("vendor_check", 5, score=9.0), pk("flip", 5, score=1.0)], 10**9, [], False)
+    assert [p.kind for p in out.ranked] == ["flip"] and not out.checks
+
+
+def test_exhausted_hold_cap_still_funds_later_flips():
+    h, f = pk("hold", cost=100 * G, profit=50 * G, score=2.0), pk("flip", cost=100 * G, score=1.0)
+    out = plan([h, f], 600 * G, [held(200 * G)], True)  # cap 0.25*800=200 -> room 0
+    assert [p.funded for p in out.ranked] == [False, True]
