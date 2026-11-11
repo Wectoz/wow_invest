@@ -74,7 +74,16 @@ Market keys used: `eu/2/111` is the Alliance AH (Normal PvE) and `eu/2/117` is t
 | `GET /v1/markets/{r}/{rs}/{h}/items/{id}` | One item. `item` holds static data: `purchase_price` (vendor buy), `sell_price` (vendor sell), `purchase_quantity`, `required_level`, `class`. `ladder` is the price depth: units and listings at each price. `series` is hourly history since about 2026-11-08 (`units`, `minimum_ask_copper`, `new_units`, `removed_units`, `early_disappearances`). `current` has `usual` at 3, 7 and 14 days, `sold_24h`, `median_ask_copper`. `houses` has this item's price on every AH. |
 | `GET /v1/markets/{r}/{rs}/{h}/rises`, `/sales`, `/search?q=` | Items priced above usual, sales per hour across the whole AH, and name search. |
 
-Field meanings the builder must confirm before relying on them: what exactly `sold_24h` counts versus `removed_24h` and `early_removed_24h`. For Devilsaur Leather, `sold_24h` equalled `early_removed_24h`. The site's own text says "likely sold" excludes cancellations. Only likely-sold numbers may feed sell-speed estimates.
+**What the sales numbers mean (confirmed 2026-11-11 from the site's own help text):**
+- Blizzard does not report sales. The site estimates them from what left the AH between hourly scans.
+- **Likely sold** (`partial_fills` in `series`): a stack shrank at the same price.
+- **Sold or cancelled** (`early_disappearances`): a listing vanished before it could have expired.
+- **Expired or unknown** (`ambiguous_removals`): everything else that left.
+- `sold_24h` and `early_removed_24h` include sold-or-cancelled. For Devilsaur Leather, `sold_24h` equalled `early_removed_24h` and `partial_fills` was 0. So `sold_24h` is an upper bound.
+
+*Rule (my call, cautious on purpose):*
+- **Effective sales per day** = likely sold + ½ × sold or cancelled, over the last 24h of `series`.
+- **For screening from the item list**, where `series` isn't fetched, use ½ × `sold_24h`.
 
 **Being polite to the site:**
 - Fetch only when `captured_at` changes.
