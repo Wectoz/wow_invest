@@ -78,6 +78,7 @@ class Holding:
     bought_at: datetime
     sell_by: datetime | None
     sold_at: datetime | None
+    sell_at: str = "alliance"
 
 
 @dataclass(slots=True)

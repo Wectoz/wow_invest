@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS picks(id INTEGER PRIMARY KEY, created_at TEXT, kind T
   item_id INTEGER, sell_at TEXT, qty INTEGER, cost INTEGER, sell_price INTEGER,
   profit INTEGER, sell_by TEXT, judged_at TEXT, hit INTEGER);
 CREATE TABLE IF NOT EXISTS holdings(id INTEGER PRIMARY KEY, item_id INTEGER, kind TEXT,
-  qty INTEGER, price_paid INTEGER, target INTEGER, bought_at TEXT, sell_by TEXT, sold_at TEXT);
+  qty INTEGER, price_paid INTEGER, target INTEGER, bought_at TEXT, sell_by TEXT, sold_at TEXT, sell_at TEXT NOT NULL DEFAULT 'alliance');
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS vendor_confirmed(item_id INTEGER PRIMARY KEY);
 """
@@ -32,6 +32,8 @@ def connect(path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    if "sell_at" not in {r[1] for r in conn.execute("PRAGMA table_info(holdings)")}:
+        conn.execute("ALTER TABLE holdings ADD COLUMN sell_at TEXT NOT NULL DEFAULT 'alliance'")
     return conn
 
 
@@ -142,12 +144,12 @@ def set_gold(conn, copper: int):
     set_setting(conn, "gold", str(copper))
 
 
-def add_holding(conn, item_id, kind, qty, price_paid, target, now, sell_by) -> int:
+def add_holding(conn, item_id, kind, qty, price_paid, target, now, sell_by, sell_at="alliance") -> int:
     with conn:
         return conn.execute(
-            "INSERT INTO holdings(item_id, kind, qty, price_paid, target, bought_at, sell_by) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (item_id, kind, qty, price_paid, target, _iso(now), _iso(sell_by))).lastrowid
+            "INSERT INTO holdings(item_id, kind, qty, price_paid, target, bought_at, sell_by, sell_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (item_id, kind, qty, price_paid, target, _iso(now), _iso(sell_by), sell_at)).lastrowid
 
 
 def mark_sold(conn, holding_id, now):
@@ -157,7 +159,7 @@ def mark_sold(conn, holding_id, now):
 
 def open_holdings(conn) -> list[Holding]:
     return [Holding(r["id"], r["item_id"], r["kind"], r["qty"], r["price_paid"], r["target"],
-                    _dt(r["bought_at"]), _dt(r["sell_by"]), None)
+                    _dt(r["bought_at"]), _dt(r["sell_by"]), None, r["sell_at"])
             for r in conn.execute("SELECT * FROM holdings WHERE sold_at IS NULL ORDER BY id")]
 
 

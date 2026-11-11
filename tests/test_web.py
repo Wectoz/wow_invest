@@ -106,28 +106,78 @@ def test_bought_form_defaults():
     assert 'action="/bought"' in h
 
 
-def sell_html(min_ask, sell_by, paid=10000, target=15000, vendor_sell=None):
+def sell_html(min_ask, sell_by, paid=10000, target=15000, vendor_sell=None, house="alliance", cut=0.05):
     c = seed(":memory:")
-    db.save_scan(c, "alliance", NOW.isoformat(), NOW.isoformat(), 0.05,
+    db.save_scan(c, house, NOW.isoformat(), NOW.isoformat(), cut,
                  [Row(5, "Ore", ICON, "Common", None, None, 1, 1, min_ask, min_ask, 3, 1, 1, vendor_sell)])
-    db.add_holding(c, 5, "hold", 1, paid, target, NOW - timedelta(days=1), sell_by)
+    db.add_holding(c, 5, "hold", 1, paid, target, NOW - timedelta(days=1), sell_by, house)
     return state_html(c)
+
+
+def listing(price):
+    return f"list at {fmt_money(price)}"
 
 
 def test_sell_now_never_suggests_below_cost_before_sell_by():
     h = sell_html(8000, NOW + timedelta(days=1))
-    assert "below cost" in h and fmt_money(undercut(8000)) not in h
+    assert "below cost — wait until sell-by" in h and "list at" not in h and "now " + fmt_money(8000) in h
     h = sell_html(20000, NOW + timedelta(days=1))
-    assert "below cost" not in h and fmt_money(undercut(20000)) in h
+    assert "below cost" not in h and listing(undercut(20000)) in h and "now " + fmt_money(20000) in h
     h = sell_html(11000, NOW + timedelta(days=1), target=19000)  # break-even 10527
-    assert fmt_money(19000) in h
+    assert listing(19000) in h
 
 
 def test_sell_now_after_sell_by_and_unlisted():
     h = sell_html(8000, NOW - timedelta(hours=1))
-    assert fmt_money(undercut(8000)) in h and "loss" in h and "below cost" not in h
+    assert "sell-by passed: " + listing(undercut(8000)) in h and "(loss " in h and "below cost" not in h
+    assert "now " + fmt_money(8000) in h
     h = sell_html(None, NOW + timedelta(days=1))
-    assert "no listings" in h and fmt_money(15000) in h
+    assert "no listings — list at target " + fmt_money(15000) in h
+
+
+def test_blackwater_holding_uses_blackwater_price_and_cut():
+    # break-even at 15% cut is 11765 > 11000, so wait; the 5% cut would have said list
+    h = sell_html(11000, NOW + timedelta(days=1), house="blackwater", cut=0.15)
+    assert "below cost — wait until sell-by" in h and "Blackwater AH" in h
+    assert "below cost" not in sell_html(11000, NOW + timedelta(days=1), house="alliance", cut=0.05)
+
+
+def test_bought_form_visible_on_ranked_and_paper_not_inside_why():
+    c = seed(":memory:", [mkpick(1), mkpick(2, kind="hold")])
+    h = state_html(c)
+    assert h.count('action="/bought"') == 2 and h.count("I bought this") == 4  # summary + button each
+    why = h[h.index("<summary>Why</summary>"):]
+    assert 'action="/bought"' not in why[:why.index("</details>")]
+    assert 'name="sell_at" value="alliance"' in h
+
+
+def test_paper_rows_not_marked_unfunded_but_ranked_are():
+    paper = mkpick(2, kind="hold", funded=False)
+    h = state_html(seed(":memory:", [paper]))
+    assert "unfunded" not in h.replace(".unfunded", "") and "not enough gold" not in h.replace(
+        "do not spend real gold", "")
+
+
+def test_paper_hit_rate_shown():
+    c = seed(":memory:")
+    assert "Hold hit rate: none judged yet" in state_html(c)
+    st = build_state(c, NOW)
+    st["stats"] = {**st["stats"], "hold_judged": 10, "hold_hits": 7}
+    assert "7 of 10 hit (70%)" in render_page(st)
+
+
+def test_labels_header_trend_depth():
+    c = seed(":memory:", [replace(mkpick(1, kind="cross"), buy_at="blackwater", trend=-0.12)])
+    h = state_html(c)
+    assert "Blackwater → Alliance" in h and "price -12% vs a day ago" in h and "7 listed just above your price" in h
+    assert "Alliance · Normal (PvE) · EU — Alliance AH + Blackwater AH" in h
+    assert "trend unknown" in state_html(seed(":memory:", [replace(mkpick(1), trend=None)]))
+    assert "Vendor → Alliance AH" in state_html(seed(":memory:", [mkpick(1, kind="vendor")]))
+
+
+def test_html_security_headers_and_refresh():
+    c = seed(":memory:")
+    assert 'content="300;url=/"' in state_html(c)
 
 
 @pytest.fixture
@@ -173,7 +223,7 @@ def test_post_gold_bad_input_keeps_old_value(server):
     path, base, _ = server
     req(base + "/gold", {"gold": "800"})
     code, body = req(base + "/gold", {"gold": "abc"})
-    assert code == 400 and "gold" in body.lower()
+    assert code == 400 and "Gold must be a number" in body
     assert db.get_gold(db.connect(path)) == 8_000_000
 
 
@@ -204,3 +254,40 @@ def test_bought_then_sold_updates_holdings(server):
     assert db.open_holdings(c) == []
     assert req(base + "/vendor-confirm", {"item_id": "7"})[0] == 303
     assert db.confirmed_vendors(c) == {7}
+
+
+def raw(port, request: bytes):
+    import socket
+    with socket.create_connection(("127.0.0.1", port)) as sk:
+        sk.sendall(request)
+        sk.shutdown(socket.SHUT_WR)
+        data = b""
+        while chunk := sk.recv(4096):
+            data += chunk
+    return int(data.split()[1])
+
+
+def test_post_body_edge_cases(server):
+    _, _, port = server
+    head = f"POST /gold HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\n".encode()
+    form = b"Content-Type: application/x-www-form-urlencoded\r\n"
+    assert raw(port, head + form + b"Content-Length: -1\r\n\r\n") == 413
+    assert raw(port, head + form + b"\r\n") == 411
+    assert raw(port, head + b"Content-Type: text/plain\r\nContent-Length: 3\r\n\r\ngold") == 415
+    bad = f"POST /gold HTTP/1.0\r\nHost: evil.example\r\n".encode()
+    assert raw(port, bad + form + b"Content-Length: 0\r\n\r\n") == 403
+
+
+def test_html_response_has_frame_headers(server):
+    _, base, _ = server
+    with urllib.request.urlopen(base + "/") as r:
+        assert r.headers["X-Frame-Options"] == "DENY"
+        assert r.headers["Content-Security-Policy"] == "frame-ancestors 'none'"
+
+
+def test_bought_rejects_unknown_sell_house(server):
+    _, base, _ = server
+    form = {"item_id": "7", "kind": "hold", "qty": "5", "price_paid": "1", "target": "5", "sell_by": "",
+            "sell_at": "evil"}
+    code, body = req(base + "/bought", form)
+    assert code == 400 and "Unknown sell house" in body

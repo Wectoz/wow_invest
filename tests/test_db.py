@@ -142,3 +142,25 @@ def test_latest_scan():
     db.save_scan(c, "alliance", iso(NOW), iso(NOW), 0.07, [row()])
     r = db.latest_scan(c, "alliance")
     assert r["captured_at"] == iso(NOW) and r["cut"] == 0.07
+
+
+def test_add_holding_defaults_sell_at_and_stores_house():
+    c = conn()
+    db.add_holding(c, 1, "hold", 1, 100, 200, NOW, None)
+    db.add_holding(c, 2, "cross", 1, 100, 200, NOW, None, sell_at="blackwater")
+    assert [h.sell_at for h in db.open_holdings(c)] == ["alliance", "blackwater"]
+
+
+def test_connect_upgrades_old_holdings_table(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    o = sqlite3.connect(path)
+    o.execute("CREATE TABLE holdings(id INTEGER PRIMARY KEY, item_id INTEGER, kind TEXT, qty INTEGER, "
+              "price_paid INTEGER, target INTEGER, bought_at TEXT, sell_by TEXT, sold_at TEXT)")
+    o.execute("INSERT INTO holdings(item_id, kind, qty, price_paid, target, bought_at) VALUES(1,'hold',1,5,6,'2026-01-01T00:00:00+00:00')")
+    o.commit(); o.close()
+    c = db.connect(path)
+    db.connect(path).close()  # idempotent
+    assert db.open_holdings(c)[0].sell_at == "alliance"
+    db.add_holding(c, 2, "cross", 1, 5, 6, NOW, None, "blackwater")
+    assert db.open_holdings(c)[1].sell_at == "blackwater"

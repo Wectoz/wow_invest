@@ -93,13 +93,16 @@ def build_state(conn, now: datetime) -> dict:
     holdings = db.open_holdings(conn)
     stats = db.hit_stats(conn)
     ali = db.latest_scan(conn, "alliance")
-    cut = ali["cut"] if ali else 0.05
-    prices = db.rows_at(conn, "alliance", 0, now)
+    houses: dict[str, tuple] = {}
+    for hs in {h.sell_at for h in holdings}:
+        sc = db.latest_scan(conn, hs)
+        houses[hs] = (sc["cut"] if sc else 0.05, db.rows_at(conn, hs, 0, now))
     held = []
     for h in sorted(holdings, key=lambda h: (h.sell_by is None, h.sell_by or now)):
         it = db.static(conn, h.item_id)
+        cut, prices = houses[h.sell_at]
         cur = prices.get(h.item_id, (None,))[0]
-        dep = deposit(it["vendor_sell"] if it else None, "alliance")
+        dep = deposit(it["vendor_sell"] if it else None, h.sell_at)
         kind, price = sell_advice(h, cur, cut, dep, now)
         loss = max(0, math.ceil(h.price_paid / h.qty / (1 - cut)) + dep - (price or 0)) * h.qty
         held.append({"h": h, "name": it["name"] if it else None, "icon": it["icon"] if it else None,
@@ -122,6 +125,18 @@ def build_state(conn, now: datetime) -> dict:
     }
 
 
+HOUSE = {"alliance": "Alliance AH", "blackwater": "Blackwater AH"}
+
+
+def route(p) -> str:
+    if p.kind == "cross":
+        a, b = (x.capitalize() for x in (p.buy_at, p.sell_at))
+        return f"{a} → {b}"
+    if p.kind in ("vendor", "vendor_check"):
+        return f"Vendor → {HOUSE.get(p.sell_at, p.sell_at)}"
+    return HOUSE.get(p.sell_at, p.sell_at)
+
+
 def _name(item_id, name) -> str:
     return esc(name) if name else f"Item {item_id}"
 
@@ -138,19 +153,20 @@ def _qcls(quality) -> str:
 
 def _bought_form(p) -> str:
     sb = p.sell_by.isoformat() if p.sell_by else ""
-    return (f'<form class="bought" method="post" action="/bought">'
+    return (f'<form class="boughtform" method="post" action="/bought">'
             f'<input type="hidden" name="item_id" value="{esc(p.item_id)}">'
             f'<input type="hidden" name="kind" value="{esc(p.kind)}">'
+            f'<input type="hidden" name="sell_at" value="{esc(p.sell_at)}">'
             f'<input type="hidden" name="target" value="{esc(p.sell_price)}">'
             f'<input type="hidden" name="sell_by" value="{esc(sb)}">'
             f'<label>Qty <input type="text" class="qty" name="qty" value="{esc(p.qty)}"></label>'
             f'<label>Paid <input type="text" name="price_paid" value="{esc(plain_gold(p.cost))}"></label>'
-            f'<button>Bought</button></form>')
+            f'<button>I bought this</button></form>')
 
 
-def _pick_row(p, rank=None, form=True, check=False) -> str:
+def _pick_row(p, rank=None, form=True, check=False, dim=False) -> str:
     label, tcls = KINDS.get(p.kind, (p.kind, ""))
-    unf = "" if p.funded or not form or rank is None else " unfunded"
+    unf = " unfunded" if dim and not p.funded else ""
     note = '<span class="note">not enough gold</span>' if unf else ""
     sb = f"<p>Sell by {_hm(p.sell_by)}</p>" if p.sell_by else ""
     if check:
@@ -161,30 +177,34 @@ def _pick_row(p, rank=None, form=True, check=False) -> str:
         side = (f'{p.qty} × {fmt_money(p.max_unit_price)} → {fmt_money(p.sell_price)}<br>'
                 f'<span class="profit">+{fmt_money(p.profit)}</span> · ~{p.days:.0f} days · sure '
                 f'<span class="conf"><i style="width:{int(p.sure * 100)}%"></i></span>')
+        trend = "trend unknown" if p.trend is None else f"price {p.trend * 100:+.0f}% vs a day ago"
         body = (f'<details><summary>Why</summary><p>{esc(p.reason)}</p>'
-                f'<p>About {p.spd:.1f} sales per day</p>{sb}{_bought_form(p) if form else ""}</details>')
+                f'<p>About {p.spd:.1f} sales per day · {trend} · {p.depth} listed just above your price</p>{sb}</details>'
+                + (f'<details class="bought"><summary>I bought this</summary>{_bought_form(p)}</details>' if form else ""))
     rk = f'<div class="rank">{rank}</div>' if rank else "<div></div>"
     return (f'<div class="pick{unf}"><div class="row">{rk}{_ico(p.icon, p.quality)}'
             f'<div><span class="name {_qcls(p.quality)}">{_name(p.item_id, p.name)}</span>'
-            f'<span class="tag {tcls}">{esc(label)}</span><span class="tag">{esc(p.buy_at)} → {esc(p.sell_at)}</span>{note}'
+            f'<span class="tag {tcls}">{esc(label)}</span><span class="tag">{esc(route(p))}</span>{note}'
             f'<div class="why">{esc(p.reason)}</div></div><div class="nums">{side}</div></div>{body}</div>')
 
 
 def _held_row(v) -> str:
     h = v["h"]
+    now_p = f'now {fmt_money(v["current"])}: ' if v["current"] is not None else ""
     if v["kind"] == "nolist":
         adv = f'no listings — list at target {fmt_money(v["price"])}'
     elif v["kind"] == "wait":
-        adv = f'below cost — wait until sell-by (now {fmt_money(v["current"])})'
+        adv = f'below cost — wait until sell-by'
     elif v["kind"] == "loss":
         adv = f'sell-by passed: list at {fmt_money(v["price"])}' + (
             f' <span class="loss">(loss {fmt_money(v["loss"])})</span>' if v["loss"] else "")
     else:
         adv = f'list at {fmt_money(v["price"])}'
+    adv = now_p + adv if v["kind"] != "nolist" else adv
     sb = f' · sell by {_hm(h.sell_by)}' if h.sell_by else ""
     return (f'<div class="held"><div class="row"><div></div>{_ico(v["icon"], v["quality"])}'
             f'<div><span class="name {_qcls(v["quality"])}">{_name(h.item_id, v["name"])}</span>'
-            f'<span class="tag">{esc(KINDS.get(h.kind, (h.kind,))[0])}</span>'
+            f'<span class="tag">{esc(KINDS.get(h.kind, (h.kind,))[0])}</span><span class="tag">{esc(HOUSE.get(h.sell_at, h.sell_at))}</span>'
             f'<div class="why">{h.qty} × paid {fmt_money(h.price_paid // h.qty)}, target {fmt_money(h.target)}{sb}</div></div>'
             f'<div class="nums">{adv}<br><form class="inline" method="post" action="/sold">'
             f'<input type="hidden" name="holding_id" value="{esc(h.id)}"><button>Sold</button></form></div></div></div>')
@@ -213,11 +233,13 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     last = _hm(state["last_scan"]) if state["last_scan"] else "never"
     return Template((HERE / "page.html").read_text(encoding="utf-8")).substitute(
         css_href=esc(css_href), banners="".join(ban),
-        sub=f'Alliance · Blackwater AH · {esc(age)}{esc(nxt)}',
+        sub=f'Alliance · Normal (PvE) · EU — Alliance AH + Blackwater AH — {esc(age)}{esc(nxt)}',
+        paper_rate=esc(f'{st["hold_hits"]} of {st["hold_judged"]} hit ({st["hold_hits"] * 100 // st["hold_judged"]}%)'
+                       if st["hold_judged"] else "none judged yet"),
         gold_text=esc(plain_gold(state["gold"])), spend=fmt_money(p.spend), profit=fmt_money(p.profit),
         crowd=f'lvl {esc(state["crowd"])}' if state["crowd"] else "unknown",
         last_scan=esc(last), hit_rate=esc(hit),
-        buy=_rows(p.ranked, "Nothing worth buying right now.", lambda x, n: _pick_row(x, n)),
+        buy=_rows(p.ranked, "Nothing worth buying right now.", lambda x, n: _pick_row(x, n, dim=True)),
         sell=_rows(state["holdings"], "Nothing held.", lambda x, n: _held_row(x)),
         paper=_rows(p.paper, "No paper holds.", lambda x, n: _pick_row(x, n)),
         checks=_rows(p.checks, "Nothing to check.", lambda x, n: _pick_row(x, None, False, True)))
@@ -243,8 +265,11 @@ def _bought(conn, f, now):
         raise ValueError("Bad sell-by date") from None
     qty = _int(f.get("qty"), "Quantity", 1, 100_000)
     paid = parse_gold(f.get("price_paid", ""))
+    sell_at = f.get("sell_at", "alliance")
+    if sell_at not in ("alliance", "blackwater"):
+        raise ValueError("Unknown sell house")
     db.add_holding(conn, _int(f.get("item_id"), "Item", 1, 10**9), kind, qty, paid,
-                   _int(f.get("target"), "Target", 0, 10**12), now, sell_by)
+                   _int(f.get("target"), "Target", 0, 10**12), now, sell_by, sell_at)
 
 
 ROUTES = {
@@ -265,6 +290,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        if ctype.startswith("text/html"):
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
         for k, v in headers:
             self.send_header(k, v)
         self.end_headers()
@@ -307,7 +335,7 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length", ""))
         except ValueError:
             return self._send(411, "length required")
-        if n > MAX_BODY:
+        if not 0 <= n <= MAX_BODY:
             return self._send(413, "too large")
         if not (self.headers.get("Content-Type") or "").startswith("application/x-www-form-urlencoded"):
             return self._send(415, "unsupported")
@@ -317,9 +345,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             ROUTES[path](conn, form, datetime.now(UTC))
         except ValueError as e:
-            conn.close()
             return self._page(400, str(e))
-        conn.close()
+        finally:
+            conn.close()
         self._send(303, headers=[("Location", "/")])
 
 

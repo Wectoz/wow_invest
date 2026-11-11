@@ -49,6 +49,6 @@ button:hover { background:linear-gradient(180deg,#a8824a,#6b5030); }
 details { grid-column:2 / -1; font-size:13px; color:var(--muted); padding:0 4px 10px 50px; }
 summary { cursor:pointer; color:var(--edge); font-size:12px; }
 details p { margin:4px 0; }
-.bought { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
+.boughtform { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
 .empty { color:var(--muted); font-style:italic; padding:8px 4px; }
 @media (max-width:640px) { .row { grid-template-columns:32px 42px 1fr; } .nums { grid-column:1 / -1; text-align:left; } details { padding-left:4px; } }
