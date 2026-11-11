@@ -11,6 +11,7 @@ MIN_PROFIT = 30000
 TOP_N = 15
 CAPTURE_SHARE = 0.5
 MAX_SALES_DAYS = 2.5
+SUPPLY_SHARE = 0.25  # never buy more than this share of the units listed on the sell house
 SOLD_OR_CANCELLED_WEIGHT = 0.5
 BUY_BELOW = 0.80
 FALLING = -0.10

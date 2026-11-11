@@ -3,8 +3,10 @@ from datetime import timedelta
 import pytest
 
 from tests.conftest import NOW, pts, steady
+from wow_invest.config import MIN_PROFIT
 from wow_invest.models import Detail, Row
 from wow_invest.picks import cross_flip, hold, quick_flip, vendor_flip
+from wow_invest.planner import plan
 from wow_invest.tables import VENDOR_ITEMS
 
 
@@ -33,7 +35,8 @@ def test_quick_flip_buys_below_80pct_and_lists_under_remaining_wall():
     assert (p.buy_at, p.sell_at, p.max_unit_price, p.depth, p.spd, p.trend) == \
         ("alliance", "alliance", 15000, 100, 48, 0)
     assert p.sell_by == NOW + timedelta(days=1)
-    assert p.name == "Item 1" and "2g" in p.reason and "48" in p.reason
+    assert p.name == "Item 1" and "2g" in p.reason and "≈48 sold/day (estimate)" in p.reason
+    assert p.listed == 300  # supply cap floor(0.25 × 300) = 75 does not bind
 
 
 def test_quick_flip_lists_under_going_when_wall_is_higher():
@@ -74,7 +77,48 @@ def test_quick_flip_none_with_thin_history():
 
 def test_quick_flip_respects_held_units():
     assert quick_flip(row(), detail(ladder=WALL), held=60, now=NOW) is None
-    assert quick_flip(row(), detail(ladder=WALL), held=55, now=NOW).qty == 5
+    assert quick_flip(row(), detail(ladder=WALL), held=50, now=NOW).qty == 10
+    # cap 5 leaves 5 at 12000 on the ladder, so we would list at 11999 and net int(11999 × 0.95) = 11399
+    assert quick_flip(row(), detail(ladder=WALL), held=55, now=NOW) is None
+
+
+def test_cross_flip_never_buys_a_unit_above_its_net_proceeds():
+    # sell on Blackwater: target 19999 nets int(19999 × 0.85) − int(5000 × 0.75) = 16999 − 3750 = 13249 < 16000
+    buy, sell = detail(series=[], ladder=WALL), detail(cut=0.15, house="blackwater")
+    p = cross_flip(row(vendor_sell=5000), buy, sell, held=0, now=NOW)
+    # only the 10 at 12000; int(19999 × 10 × 0.85) = 169991 − 37500 − 120000
+    assert (p.qty, p.cost, p.max_unit_price, p.sell_price, p.profit) == (10, 120000, 12000, 19999, 12491)
+
+
+def test_hold_never_buys_above_net_proceeds_of_its_target():
+    # target 80 nets int(80 × 0.95) − int(120 × 0.15) = 76 − 18 = 58, under the current 60
+    d = detail(series=flood, ladder=[(55, 30), (60, 500)])
+    p = hold(row(item_id=785, vendor_sell=120), d, crowd=(20, 30), held=0, now=NOW)
+    assert (p.qty, p.cost, p.max_unit_price) == (30, 1650, 55)
+
+
+def test_churn_on_a_small_house_is_not_a_pick():
+    # Strange Dust on Blackwater, first live run: 1645 bought against 734 listed. Each hour 10 likely
+    # sold, 89 gone early, 71 new: ≈ 10 + 0.5 × 18 = 19 an hour = 456 a day (1308 before netting).
+    # Listed units creep up 2 an hour; the price drifts from 150 to 139 (−6%, so the trend check passes).
+    s = pts([(h, 740 - 2 * h, 139 + h // 4, 10, 89, 71) for h in range(48)])
+    sell = detail(series=s, ladder=[(139, 300), (145, 440)], cut=0.15, house="blackwater")
+    buy = detail(series=[], ladder=[(75, 300), (80, 400), (89, 1000)])
+    p = cross_flip(row(item_id=10940, vendor_sell=1), buy, sell, held=0, now=NOW)
+    # median listed 717 → cap floor(179.25) = 179, all at 75c; sell undercut(min(141, 139)) = 138;
+    # int(138 × 179 × 0.85) = 20996 − 13425 = 7571 (old rules: 1635 units, +54070, funded)
+    assert (p.spd, p.listed, p.qty, p.cost, p.sell_price, p.profit) == (456, 717, 179, 13425, 138, 7571)
+    assert p.qty <= 0.25 * p.listed and p.profit < MIN_PROFIT
+    assert plan([p], gold=10**9, holdings=[], proven=False).ranked == []
+
+
+def test_high_churn_with_real_fills_is_capped_at_a_quarter_of_listed():
+    # 50 likely sold + 0.5 × (200 − 180) = 60 an hour = 1440 a day → sales cap 1800, but only 400 listed
+    s = pts([(h, 400, 20000, 50, 200, 180) for h in range(48)])
+    buy = detail(series=[], ladder=[(12000, 500)], cut=0.15, house="blackwater")
+    p = cross_flip(row(), buy, detail(series=s, ladder=[(19900, 400)]), held=0, now=NOW)
+    # int(19899 × 100 × 0.95) = 1890405 − 1200000
+    assert (p.spd, p.listed, p.qty, p.cost, p.profit) == (1440, 400, 100, 1200000, 690405)
 
 
 def test_cross_flip_buys_on_blackwater_sells_on_alliance_with_alliance_cut():

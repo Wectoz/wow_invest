@@ -56,6 +56,11 @@ def sales_per_day_window(series, now, start_h, end_h) -> float:
     return _sales(series, now, start_h, end_h) * 24 / (end_h - start_h)
 
 
+def listed_units(series, now) -> int:
+    m = window_median(series, now, 0, 24, "units")
+    return 0 if m is None else int(m)
+
+
 def history_hours(series, now) -> float:
     ages = [_age_h(p, now) for p in series if p.min_ask is not None]
     return max(ages) if ages else 0.0

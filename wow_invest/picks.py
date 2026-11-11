@@ -6,8 +6,8 @@ from . import config as c
 from .crowd import item_band, overlaps
 from .models import Pick
 from .pricing import (change, days_to_sell, deposit, going_price, history_hours, ladder_buy,
-                      max_units, net_proceeds, sales_per_day, sales_per_day_window, score,
-                      sureness, undercut, window_median)
+                      listed_units, max_units, net_proceeds, sales_per_day, sales_per_day_window,
+                      score, sureness, undercut, window_median)
 from .tables import VENDOR_ITEMS
 
 
@@ -47,19 +47,29 @@ def _build(kind, row, sell, held, now, buy_at, why, going=0, ladder=None, limit=
     sure = sureness(hours, spd)
     if hours < c.MIN_HISTORY_HOURS or spd < c.MIN_SALES_PER_DAY or trend is None or sure < c.SURE_MIN:
         return None
-    cap = max_units(spd, held)
+    listed = listed_units(s, now)
+    cap = min(max_units(spd, held), math.floor(c.SUPPLY_SHARE * listed))  # what the sell house can absorb
+    dep = deposit(row.vendor_sell, sell.house)
+
+    def price(left):
+        return target if target is not None else undercut(min(going, left[0][0]) if left else going)
+
     if ladder is None:
         stock = VENDOR_ITEMS.get(row.item_id)  # None: unlimited or unknown stock
         qty = cap if stock is None else min(cap, stock)
         cost, top, left = unit_cost * qty, unit_cost, sell.ladder
     else:
-        qty, cost, top = ladder_buy(ladder, limit, cap)
-        left = _left(sell.ladder, qty) if buy_at == sell.house else sell.ladder
+        while True:  # no unit may cost more than it nets; buying less can lower our own list price, so repeat
+            qty, cost, top = ladder_buy(ladder, limit, cap)
+            left = _left(sell.ladder, qty) if buy_at == sell.house else sell.ladder
+            net = int(price(left) * (1 - sell.cut)) - dep
+            if qty == 0 or top <= net:
+                break
+            limit = net
     if qty == 0:
         return None
-    if target is None:
-        target = undercut(min(going, left[0][0]) if left else going)
-    profit = net_proceeds(target, qty, sell.cut, deposit(row.vendor_sell, sell.house)) - cost
+    target = price(left)
+    profit = net_proceeds(target, qty, sell.cut, dep) - cost
     if kind == "hold":  # a hold waits for the recovery, so it never scores as selling instantly
         days = min(c.HOLD_DAYS, 1 + days_to_sell(qty, spd))
         sell_by = now + timedelta(days=c.HOLD_DAYS)
@@ -70,8 +80,8 @@ def _build(kind, row, sell, held, now, buy_at, why, going=0, ladder=None, limit=
                 quality=row.quality, buy_at=buy_at, sell_at=sell.house, qty=qty, cost=cost,
                 max_unit_price=top, sell_price=target, profit=profit, days=days,
                 score=score(profit, cost, days), sure=sure,
-                reason=f"{why(top)}; about {spd:.0f} sell per day.", spd=spd, trend=trend,
-                depth=sum(u for p, u in left if target < p <= target * 1.05), sell_by=sell_by)
+                reason=f"{why(top)}; ≈{spd:.0f} sold/day (estimate).", spd=spd, trend=trend,
+                depth=sum(u for p, u in left if target < p <= target * 1.05), sell_by=sell_by, listed=listed)
 
 
 def _flip(kind, row, buy, sell, held, now):

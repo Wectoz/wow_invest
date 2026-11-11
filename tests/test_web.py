@@ -167,9 +167,10 @@ def test_paper_hit_rate_shown():
 
 
 def test_labels_header_trend_depth():
-    c = seed(":memory:", [replace(mkpick(1, kind="cross"), buy_at="blackwater", trend=-0.12)])
+    c = seed(":memory:", [replace(mkpick(1, kind="cross"), buy_at="blackwater", trend=-0.12, listed=740)])
     h = state_html(c)
     assert "Blackwater → Alliance" in h and "price -12% vs a day ago" in h and "7 listed just above your price" in h
+    assert "≈4 sold/day (estimate) · 740 listed on the sell AH" in h and "sales per day" not in h
     assert "Alliance · Normal (PvE) · EU — Alliance AH + Blackwater AH" in h
     assert "trend unknown" in state_html(seed(":memory:", [replace(mkpick(1), trend=None)]))
     assert "Vendor → Alliance AH" in state_html(seed(":memory:", [mkpick(1, kind="vendor")]))

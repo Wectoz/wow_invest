@@ -29,6 +29,11 @@ def test_sales_net_relisted_units_out_of_early_disappearances():
     s = pts([(1,0,1,4,10,6),(5,0,1,6,10,12),(30,0,1,100,100,0)])
     assert sales_per_day(s, NOW) == 12.0
     assert sales_per_day_window(s, NOW, 0, 12) == 24.0
+def test_listed_units_is_median_of_last_24h():
+    from tests.conftest import steady
+    from wow_invest.pricing import listed_units
+    assert listed_units(pts([(1,10,1,0,0),(5,31,1,0,0),(30,999,1,0,0)]), NOW) == 20  # median 20.5
+    assert listed_units(steady, NOW) == 300 and listed_units([], NOW) == 0
 def test_steady_fixture_is_48_sales_a_day():
     from tests.conftest import steady
     from wow_invest.pricing import sales_per_day, sales_per_day_window, history_hours, sureness

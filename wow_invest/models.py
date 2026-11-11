@@ -66,6 +66,7 @@ class Pick:
     depth: int  # units listed within 5% above sell_price after our buy
     sell_by: datetime | None = None
     funded: bool = False
+    listed: int = 0  # median units listed on the sell house over the last 24h
 
 
 @dataclass(slots=True)

@@ -179,7 +179,8 @@ def _pick_row(p, rank=None, form=True, check=False, dim=False) -> str:
                 f'<span class="conf"><i style="width:{int(p.sure * 100)}%"></i></span>')
         trend = "trend unknown" if p.trend is None else f"price {p.trend * 100:+.0f}% vs a day ago"
         body = (f'<details><summary>Why</summary><p>{esc(p.reason)}</p>'
-                f'<p>About {p.spd:.1f} sales per day · {trend} · {p.depth} listed just above your price</p>{sb}</details>'
+                f'<p>≈{p.spd:.0f} sold/day (estimate) · {p.listed} listed on the sell AH · {trend}'
+                f' · {p.depth} listed just above your price</p>{sb}</details>'
                 + (f'<details class="bought"><summary>I bought this</summary>{_bought_form(p)}</details>' if form else ""))
     rk = f'<div class="rank">{rank}</div>' if rank else "<div></div>"
     return (f'<div class="pick{unf}"><div class="row">{rk}{_ico(p.icon, p.quality)}'
