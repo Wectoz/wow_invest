@@ -123,6 +123,12 @@ def test_get_json_honours_retry_after_on_429():
     assert 30 in sleeps and 2 not in sleeps
 
 
+def test_get_json_caps_retry_after_at_five_minutes():
+    c, _, sleeps = client(http(429, 86400), {"ok": 1})
+    c.get_json("/x")
+    assert sleeps[0] == 300 and 86400 not in sleeps  # then the usual 1 s gap (the fake clock never moves)
+
+
 def test_requests_send_generic_user_agent():
     c, f, _ = client({"ok": 1})
     c.get_json("/x")

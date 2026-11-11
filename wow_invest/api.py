@@ -79,7 +79,7 @@ class Client:
                 if e.code == 404 or not (e.code == 429 or e.code >= 500):
                     raise ApiError(f"HTTP {e.code} for {path}", transient=False) from e
                 ra = e.headers.get("Retry-After") if e.headers else None
-                retry_after = int(ra) if ra and ra.isdigit() else None
+                retry_after = min(int(ra), config.RETRY_AFTER_MAX_S) if ra and ra.isdigit() else None
                 err = e
             except (urllib.error.URLError, ValueError, OSError) as e:  # ValueError covers bad JSON
                 self._last = self._clock()

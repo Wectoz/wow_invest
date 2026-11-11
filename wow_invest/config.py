@@ -5,6 +5,7 @@ HOUSES = {"alliance": "eu/2/111", "blackwater": "eu/2/117"}
 USER_AGENT = "ah-helper/0.1"
 REQUEST_GAP_S = 1.0
 RETRY_DELAYS_S = (2, 4, 8)
+RETRY_AFTER_MAX_S = 300  # a huge Retry-After would freeze the scan thread
 POLL_MINUTES = 5
 STALE_HOURS = 2
 MIN_PROFIT = 30000
