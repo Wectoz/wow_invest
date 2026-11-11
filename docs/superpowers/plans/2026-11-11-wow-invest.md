@@ -21,7 +21,7 @@
   - Keep at least 1.0 s between requests. That works out at about 200 requests per new scan.
   - User-Agent is the neutral `ah-helper/0.1`. Don't name it after the public repo, because that would link the requests to the GitHub account.
   - Back off on errors: 3 tries at 2, 4 and 8 s, or the `Retry-After` value on a 429. Then skip that request.
-- **One pick per item.** The quantity cap counts every open holding of the item, whatever its kind. A scan keeps only the best-scoring pick for each item.
+- **One pick per item.** The quantity cap counts every open holding of the item, whatever its kind. The planner keeps only the best-scoring buy for each item. A paper hold or a vendor check never hides a buy.
 - **Flips list under the real competition:** `sell_price = undercut(min(going, cheapest ladder price left after our buy))`.
 - **Holds don't sell instantly:** `days = min(HOLD_DAYS, 1 + days_to_sell)`.
 - **Missing history means no pick.** If `change()` returns `None`, the builder returns no pick.
@@ -455,8 +455,8 @@ def test_hold_none_when_sales_fall_with_price(): ...
     - `hold_days ≥ PROVEN_MIN_DAYS`
   - `best_per_item(picks:list[Pick]) -> list[Pick]`. Keeps the highest-score pick for each `item_id`. The scanner also uses this before saving.
   - `plan(candidates:list[Pick], gold:int, holdings:list[Holding], proven:bool) -> Plan`. In order:
-    1. Drop picks with `profit < MIN_PROFIT`, then apply `best_per_item`.
-    2. Send `vendor_check` to `checks`. Send `hold` to `paper` unless `proven`. The rest is the ranked pool.
+    1. Drop picks with `profit < MIN_PROFIT`.
+    2. Send `vendor_check` to `checks`. Send `hold` to `paper` unless `proven`. The rest is the ranked pool. Apply `best_per_item` to the pool. Then apply it to `paper` and to `checks`, each leaving out items already in the pool. A paper hold or a vendor check never hides a buy.
     3. Sort the pool by `score` descending and keep `TOP_N`. Sort `paper` by score and keep `TOP_N`. Sort `checks` by score and keep `CHECKS_N`.
     4. Fund top-down from `gold`:
        - A pick that fits is `funded=True`.
@@ -536,7 +536,7 @@ def test_only_snapshots_of_sell_house_count(): ...                # Blackwater r
 - Test: `tests/test_scanner.py`
 
 **Interfaces:**
-- Consumes: `api.Client`, `api.ApiError`, `db.*`, `picks.*`, `crowd.estimate_crowd`, `crowd.item_band`, `planner.best_per_item`, `tracker.judge`.
+- Consumes: `api.Client`, `api.ApiError`, `db.*`, `picks.*`, `crowd.estimate_crowd`, `crowd.item_band`, `planner.plan`, `tracker.judge`.
 - Produces:
   - `run_cycle(client, conn, now) -> str`, which returns `"no-change"`, `"stale"`, `"done"` or `"error"`. In order:
     1. `times = client.scan_times()`. If both houses' `captured_at` equal `db.last_captured`, return `"no-change"`.
@@ -554,8 +554,8 @@ def test_only_snapshots_of_sell_house_count(): ...                # Blackwater r
     9. For each candidate, fetch the detail for the house it sells on. Cross candidates also need the house they buy on. Run the builders for that candidate's category; a `flip` candidate also tries `vendor_flip`. Pass `held` from `db.held_units()[item_id]`.
        - An `ApiError` on one candidate skips that candidate.
        - `MAX_ERRORS_IN_ROW` consecutive errors end the cycle with `"error"`. Data already committed stays, and candidates are not replaced.
-    10. Apply `planner.best_per_item` to all non-None picks, then call `db.save_candidates(sorted by score, alliance captured_at)`.
-    11. Record only what the page could show: picks with `profit ≥ MIN_PROFIT`, the top `TOP_N` non-hold picks (excluding `vendor_check`) plus the top `TOP_N` holds, all by score. Call `db.record_picks` on those.
+    10. Call `db.save_candidates(all non-None picks sorted by score, alliance captured_at)`. Don't dedupe across kinds here; the planner does that.
+    11. Record only what the page could show: `p = planner.plan(candidates, gold=0, holdings=[], proven=False)`, then `db.record_picks(p.ranked + p.paper, now)`. That's the same filtering, dedupe and top-N the page uses. `vendor_check` is never recorded.
     12. Call `tracker.judge`, then `db.prune`. Return `"done"`.
   - `loop(client_factory, db_path, stop:threading.Event)`. It opens its own connection, calls `run_cycle` every `POLL_MINUTES`, logs the result with `logging`, and keeps running after any exception (logged with traceback).
 
