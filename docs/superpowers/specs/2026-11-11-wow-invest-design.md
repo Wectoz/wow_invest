@@ -150,11 +150,11 @@ The look the user approved in the mockups (`.superpowers/brainstorm/*/content/to
   - a one-line reason
   - quantity × max price → sell price
   - net profit, time to sell, and the "sure" bar
-- **Clicking a row** shows why it was picked: price trend, sales per day, ladder depth.
+- **Clicking a row** shows why it was picked: price trend, estimated sales per day, ladder depth.
 - **Bought button:** each row has an "I bought this" button.
 - **Sell now:** a "Sell now" section lists holdings, sorted by sell-by time, each with a "Sold" button.
-- **On paper:** an "On paper" section shows unfunded hold picks and the hold hit rate so far, e.g. "6 of 8 hit (75%)".
-- **Track record:** the page shows the hit rate of past picks.
+- **On paper:** an "On paper" section shows unfunded hold picks and how often holds' prices held at target so far, e.g. "price held at target: 6 of 8 (75%)".
+- **Track record:** the page shows how often past picks' prices held at target. This doesn't prove they sold.
 - **Refresh:** the page refreshes itself after each new scan.
 
 ## How it gets made (my calls; the user handed these to me)
