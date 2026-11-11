@@ -19,7 +19,8 @@
 - Be polite to the site:
   - Fetch lists and details only when `/v1/markets` shows a new `captured_at`.
   - Keep at least 1.0 s between requests. That works out at about 200 requests per new scan.
-  - User-Agent is the neutral `ah-helper/0.1`. Don't name it after the public repo, because that would link the requests to the GitHub account.
+  - User-Agent is the generic `ah-helper/0.1`, with no personal details.
+  - After a failed cycle, wait longer before the next one: double the wait each time, up to 60 minutes.
   - Back off on errors: 3 tries at 2, 4 and 8 s, or the `Retry-After` value on a 429. Then skip that request.
 - **One pick per item.** The quantity cap counts every open holding of the item, whatever its kind. The planner keeps only the best-scoring buy for each item. A paper hold or a vendor check never hides a buy.
 - **Flips list under the real competition:** `sell_price = undercut(min(going, cheapest ladder price left after our buy))`.

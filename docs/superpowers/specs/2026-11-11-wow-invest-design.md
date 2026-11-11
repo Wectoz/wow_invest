@@ -1,7 +1,7 @@
 # wow_invest: design
 
 Date: 2026-11-11
-Status: draft, awaiting the user's approval
+Status: approved by the user on 2026-11-11, then revised after the Fable 5.2 reviews
 
 ## Intent
 
@@ -29,7 +29,7 @@ Why: the site's own deals page lists everything priced under its usual price. In
 5. **Keeps score.** Every pick the page could show is saved.
    - A pick is judged at its sell-by time.
    - It's a hit if the price held at or above its target for at least 3 scans in a row before then.
-   - The page shows that hit rate.
+   - The page shows that hit rate, labelled "price held at target", because it shows that the price held, not that anything sold. Tracking real sold outcomes is a later improvement.
 6. **Knows what the user holds (user decision).**
    - **"I bought this" button** on each pick. It records quantity and price paid, filled in from the pick and editable.
    - **"Sell now" list** of what the user holds, showing for each item:
@@ -91,7 +91,8 @@ Market keys used: `eu/2/111` is the Alliance AH (Normal PvE) and `eu/2/117` is t
 - `sold_24h` and `early_removed_24h` include sold-or-cancelled. For Devilsaur Leather, `sold_24h` equalled `early_removed_24h` and `partial_fills` was 0. So `sold_24h` is an upper bound.
 
 *Rule (my call, cautious on purpose):*
-- **Effective sales per day** = likely sold + ½ × sold or cancelled, over the last 24h of `series`.
+- **Effective sales per day** = likely sold + ½ × max(0, sold or cancelled − newly listed), summed hour by hour over the last 24h of `series`.
+  - Subtracting new listings nets out cancel-and-relist churn, which dominated cheap bulk items in the first live run.
 - **For screening from the item list**, where `series` isn't fetched, use ½ × `sold_24h`.
 
 **Being polite to the site:**
@@ -100,7 +101,7 @@ Market keys used: `eu/2/111` is the Alliance AH (Normal PvE) and `eu/2/117` is t
 - Use a generic User-Agent with no personal details.
 - Back off on errors.
 
-A full refresh is roughly 26 list pages × 2 AHs, plus item detail for the top candidates and a slow backfill of static item data, so about 200 requests per new scan. At one per second that's about 3–4 minutes an hour. The User-Agent is neutral (`ah-helper/0.1`), so it can't be traced to the public repo. Static item data (`purchase_price`, `required_level` and so on) never changes; fetch it once per item and keep it.
+A full refresh is roughly 26 list pages × 2 AHs, plus item detail for the top candidates and a slow backfill of static item data, so about 200 requests per new scan. At one per second that's about 3–4 minutes an hour. The User-Agent is a generic `ah-helper/0.1` and carries no personal details. Static item data (`purchase_price`, `required_level` and so on) never changes; fetch it once per item and keep it.
 
 ## How a pick is judged
 
@@ -109,7 +110,10 @@ A full refresh is roughly 26 list pages × 2 AHs, plus item detail for the top c
 3. **Real cost.** The cost of buying N units is walked up the `ladder`, not N × the minimum price.
 4. **Realistic sell price.** Price just under the current competition, minus that AH's cut and the listing deposit. Read the cut from the API's `auction_cut` field. Checked 2026-11-11: Alliance takes **5%** and Blackwater takes **15%**, which matters for cross-AH flips.
 5. **Days to sell** = units bought ÷ the share of daily likely-sold units the user can expect to capture. *My call:* assume half of daily sales unless the data supports more.
-6. **Quantity cap.** Never more than about 2–3 days of normal sales, even for a hold.
+6. **Quantity cap.**
+   - Never more than about 2–3 days of normal sales, even for a hold.
+   - Never more than 25% of the units normally listed on the house you sell on.
+   - Never buy a unit priced above what it nets after that house's cut and deposit.
 7. **Confidence is a filter, not part of the score.** Hide items with too few sales or too little history. The page shows a "sure" bar for each pick.
 
 ### Short holds and the crowd
