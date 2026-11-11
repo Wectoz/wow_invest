@@ -1,33 +1,46 @@
-# wow_invest
+# WoW Invest
 
-A local auction-house advisor for World of Warcraft. It watches prices, then suggests what to buy and what to sell, with the profit it expects after the auction house cut.
+A desktop auction-house advisor for World of Warcraft. It watches prices, then suggests what to buy and what to sell, with the profit it expects after the auction house cut.
 
 Built for **WoW Forever, EU, Normal (PvE), Alliance**, plus the **Blackwater** AH. Other realms and factions are not covered.
 
-It reads the public [blackwater.exchange](https://blackwater.exchange) API, and does it politely: about one request a second, and only when the site has a new scan. It is not affiliated with Blizzard or blackwater.exchange.
+It reads the public [blackwater.exchange](https://blackwater.exchange) API politely: about one request a second, and only when the site has a new scan. It is not affiliated with Blizzard or blackwater.exchange.
 
 It never touches the game. You buy and sell by hand.
 
-## Run it
+## Install (Windows 10/11)
 
-1. Install [uv](https://docs.astral.sh/uv/).
-2. `uv run python -m wow_invest`
-3. Open http://localhost:8765 (the server listens on localhost only).
+1. On GitHub, click **Code → Download ZIP**, then extract it anywhere. You can also `git clone` it.
+2. Double-click **`install.cmd`**.
+3. Double-click **WoW Invest** on your desktop.
 
-Options: `--port 8765`, `--db data/wow_invest.db`.
+The installer sets up everything for your Windows user only:
+- [uv](https://docs.astral.sh/uv/), a Python manager
+- Python 3.12
+- pywebview, which draws the window with WebView2, a component built into Windows
+- the program, installed in `%LOCALAPPDATA%\WowInvest`
 
-Enter the gold you have on the page, and it suggests a spend. Mark what you bought and sold so it can track your holds.
+It doesn't need admin rights. To update, download the new version and run `install.cmd` again; your data is kept.
 
-## Good to know
+The program opens in its own window. Closing the window quits it.
 
-- On first start the page shows "Gathering price history". Picks can appear after the first scan cycle (a few minutes), because the site already keeps price history. Holds need about a day of the program's own scans.
-- Holds stay "on paper" until their price has held at target often enough: 10 judged, 70% of them, across 5 items and 3 days.
+If Windows says the file is blocked, right-click `install.cmd`, choose **Properties**, tick **Unblock**, then run it again.
+
+**Uninstall:** delete the desktop icon and the `%LOCALAPPDATA%\WowInvest` folder, which also holds your data.
+
+## Using it
+
+Enter the gold you have and the program suggests what to spend it on. Mark what you bought and sold, so it can keep track of what you hold.
+
+- Right after the first start the page says "Gathering price history". Picks can appear after the first scan cycle, which takes a few minutes, because the site already keeps price history. Holds need about a day of scans.
+- Holds stay "on paper", meaning tracked but not funded, until their price has held at target often enough: at least 10 judged holds, 70% of them hitting, across at least 5 items and 3 days.
 - The listing-deposit rates are a guess. Check them in game.
 
-## Tests
+## For developers
 
-`uv run pytest -q`
+```
+uv run pytest -q                 # tests
+uv run python -m wow_invest      # run as a local web page on http://localhost:8765 (Linux/WSL)
+```
 
-## Data
-
-Everything lives in `data/wow_invest.db` (git-ignored).
+Data: `%LOCALAPPDATA%\WowInvest\wow_invest.db` on Windows; `data/wow_invest.db` when run from the repo, which git ignores.
