@@ -26,7 +26,10 @@ Why: the site's own deals page lists everything priced under its usual price. In
 2. **Ranking (the user's rule):** profit per gold spent, and how fast it sells. Score = (net profit ÷ gold spent) ÷ expected days to sell. Ties don't need special handling.
 3. **Fitted to the user's gold.** The user types their current gold into the page. Picks are funded from #1 downward until the gold runs out. The page shows gold, suggested spend, expected profit, and the estimated level of the crowd.
 4. **Follows the crowd.** The program estimates where the typical player's level is and how it is moving. It starts from the user's 20–30 guess and corrects that from AH data. Hold picks and their reasons use this estimate.
-5. **Keeps score.** Every pick is saved. Later scans check whether the price reached the pick's target before its sell-by time. The page shows that hit rate.
+5. **Keeps score.** Every pick the page could show is saved.
+   - A pick is judged at its sell-by time.
+   - It's a hit if the price held at or above its target for at least 3 scans in a row before then.
+   - The page shows that hit rate.
 6. **Knows what the user holds (user decision).**
    - **"I bought this" button** on each pick. It records quantity and price paid, filled in from the pick and editable.
    - **"Sell now" list** of what the user holds, showing for each item:
@@ -40,7 +43,13 @@ Why: the site's own deals page lists everything priced under its usual price. In
    - **Gold is still typed in by the user.**
 7. **Holds start on paper (user decision).**
    - Hold picks appear in a separate "On paper" section. They are tracked but not funded, and not counted in suggested spend.
-   - They only join the funded list once **at least 10 paper holds have been judged and at least 70% hit their target before their sell-by time**. These thresholds are my call; the user agreed to "paper first".
+   - They only join the funded list once, **among the last 20 judged holds**, these all hold:
+     - at least 10 have been judged
+     - at least 70% hit
+     - they cover at least 5 different items
+     - they were picked on at least 3 different days
+
+     These thresholds are my call; the user agreed to "paper first". The item and day rules stop one lucky item from unlocking real gold.
    - Quick, cross-AH and vendor flips are funded from day one.
 8. **Worth the user's time (user decision).** Cheap items are fine, but every pick must make **at least 3g net profit** (my reading of "a few gold at least"). The list shows the top 15 that clear that (my call).
 
@@ -91,7 +100,7 @@ Market keys used: `eu/2/111` is the Alliance AH (Normal PvE) and `eu/2/117` is t
 - Use a generic User-Agent with no personal details.
 - Back off on errors.
 
-A full refresh is roughly 26 list pages × 2 AHs, plus item detail for the top candidates only, so about 100 requests an hour. Static item data (`purchase_price`, `required_level` and so on) never changes; fetch it once per item and keep it.
+A full refresh is roughly 26 list pages × 2 AHs, plus item detail for the top candidates and a slow backfill of static item data, so about 200 requests per new scan. At one per second that's about 3–4 minutes an hour. The User-Agent is neutral (`ah-helper/0.1`), so it can't be traced to the public repo. Static item data (`purchase_price`, `required_level` and so on) never changes; fetch it once per item and keep it.
 
 ## How a pick is judged
 

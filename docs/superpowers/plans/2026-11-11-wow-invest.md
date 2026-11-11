@@ -18,9 +18,23 @@
 - The program never touches the game. It only recommends.
 - Be polite to the site:
   - Fetch lists and details only when `/v1/markets` shows a new `captured_at`.
-  - Keep at least 1.0 s between requests.
-  - User-Agent is `wow_invest/0.1 (personal tool)`, with no personal details.
-  - Back off on errors: 3 tries at 2, 4 and 8 s, then give up the cycle.
+  - Keep at least 1.0 s between requests. That works out at about 200 requests per new scan.
+  - User-Agent is the neutral `ah-helper/0.1`. Don't name it after the public repo, because that would link the requests to the GitHub account.
+  - Back off on errors: 3 tries at 2, 4 and 8 s, or the `Retry-After` value on a 429. Then skip that request.
+- **One pick per item.** The quantity cap counts every open holding of the item, whatever its kind. A scan keeps only the best-scoring pick for each item.
+- **Flips list under the real competition:** `sell_price = undercut(min(going, cheapest ladder price left after our buy))`.
+- **Holds don't sell instantly:** `days = min(HOLD_DAYS, 1 + days_to_sell)`.
+- **Missing history means no pick.** If `change()` returns `None`, the builder returns no pick.
+- **The track record is judged only at sell-by.**
+  - A pick is a hit if `min_ask ≥ target` held for at least **3 consecutive** snapshots of the sell house between creation and sell-by.
+  - A new pick for the same item and kind isn't recorded while an earlier pick's sell-by is still ahead.
+  - Holds are proven only when the **last 20** judged holds have:
+    - at least 10 judged, and at least 70% hits
+    - at least **5 different items**
+    - at least **3 different pick days**
+  - Only picks the page would show are recorded: profit ≥ 3g and in the top 15.
+- **Data age comes from the Blizzard snapshot, `auctions_at`**, not from `captured_at`. Use it for the stale check and show it on the page.
+- **Commits list paths explicitly:** `git add <the task's Files>`, never `git add -A`.
 - All money is integer copper. 1g = 10000.
 - Minimum net profit per pick: **30000 copper (3g)**. Show the **top 15**.
 - Capture share: **0.5**. Quantity cap: **2.5 days** of capturable sales, minus units already held.
@@ -101,14 +115,22 @@ tests/test_*.py                one test file per module
   - `HOLD_RECOVERY = 0.5`, `HOLD_DAYS = 3`, `HOLD_MAX_SHARE = 0.25`, `HOLD_ENDGAME_LEVEL = 50`
   - `PAPER_MIN_JUDGED = 10`, `PAPER_MIN_HIT = 0.70`
   - `VENDOR_CHECK_RATIO = 2.0`, `CROWD_PRIOR = (20, 30)`, `CROWD_MIN_SALES = 200`
-  - `STATIC_PER_CYCLE = 60`, `DETAIL_PER_CYCLE = 80`
+  - `STATIC_PER_CYCLE = 60`, `DETAIL_QUOTAS = {"flip": 25, "cross": 20, "vendor": 10, "hold": 25}`, `MAX_ERRORS_IN_ROW = 3`, `CHECKS_N = 5`
+  - `JUDGE_RUN = 3`, `PROVEN_RECENT = 20`, `PROVEN_MIN_ITEMS = 5`, `PROVEN_MIN_DAYS = 3`
   - `DEPOSIT_RATE = {"alliance": 0.15, "blackwater": 0.75}`, as a fraction of vendor sell price per unit for a 24h listing. Add the comment `# shortcut: classic-style guess, verify by listing one item in game`.
 - Produces, in `models.py`, these dataclasses (all `frozen=False`, `slots=True`):
   - `Row(item_id:int, name:str|None, icon:str|None, quality:str|None, class_name:str|None, subclass_name:str|None, required_level:int|None, item_level:int|None, min_ask:int|None, avg_ask:int|None, units:int, listings:int, sold_24h:int, vendor_sell:int|None)`
   - `Point(at:datetime, units:int, min_ask:int|None, partial_fills:int, early:int)`. `at` is timezone-aware UTC.
   - `Detail(item_id:int, house:str, ladder:list[tuple[int,int]], series:list[Point], cut:float, purchase_price:int, purchase_quantity:int, sell_price:int, required_level:int|None)`. `ladder` is `(unit_price_copper, units)`, cheapest first.
-  - `Pick(kind:str, item_id:int, name:str, icon:str|None, quality:str|None, buy_at:str, sell_at:str, qty:int, cost:int, max_unit_price:int, sell_price:int, profit:int, days:float, score:float, sure:float, reason:str, sell_by:datetime|None=None, funded:bool=False)`. `kind` is one of `"flip"`, `"cross"`, `"vendor"`, `"vendor_check"`, `"hold"`.
-  - `Holding(id:int, item_id:int, kind:str, qty:int, price_paid:int, bought_at:datetime, sell_by:datetime|None, sold_at:datetime|None)`. `price_paid` is the total for all units.
+  - `Pick(kind:str, item_id:int, name:str, icon:str|None, quality:str|None, buy_at:str, sell_at:str, qty:int, cost:int, max_unit_price:int, sell_price:int, profit:int, days:float, score:float, sure:float, reason:str, spd:float, trend:float|None, depth:int, sell_by:datetime|None=None, funded:bool=False)`.
+    - `kind` is one of `"flip"`, `"cross"`, `"vendor"`, `"vendor_check"`, `"hold"`.
+    - `spd` is effective sales per day.
+    - `trend` is `change(min_ask)`.
+    - `depth` is the units listed within 5% above `sell_price` after our buy.
+    - These last three feed the row's "why" details.
+  - `Holding(id:int, item_id:int, kind:str, qty:int, price_paid:int, target:int, bought_at:datetime, sell_by:datetime|None, sold_at:datetime|None)`.
+    - `price_paid` is the total for all units.
+    - `target` is the pick's `sell_price` per unit.
   - `Plan(ranked:list[Pick], paper:list[Pick], checks:list[Pick], spend:int, profit:int)`
 - Produces, in `pricing.py`:
   - `ladder_buy(ladder, max_unit_price:int, max_qty:int) -> tuple[int,int,int]`. Returns `(qty, cost, top_unit_price)`, buying the cheapest units with price ≤ `max_unit_price`, up to `max_qty`. Returns `(0, 0, 0)` if none.
@@ -116,6 +138,8 @@ tests/test_*.py                one test file per module
   - `window_median(series, now, start_h:float, end_h:float, field:str) -> float|None`. Median of `field` (`"min_ask"` or `"units"`) over points aged between `start_h` and `end_h` hours.
   - `change(series, now, field) -> float|None`. Equals `window_median(0,6)/window_median(24,48) − 1`. `None` if either side is missing.
   - `sales_per_day(series, now) -> float`. Equals `Σ partial_fills + SOLD_OR_CANCELLED_WEIGHT × Σ early` over the last 24h.
+    - Don't rescale for gaps in the series: each point already counts everything that left since the previous scan.
+    - The reviewer confirmed that partial fills plus early disappearances over 24h equal `sold_24h`.
   - `sales_per_day_window(series, now, start_h, end_h) -> float`. The same sum over hours `start_h`–`end_h` ago, scaled to 24h.
   - `history_hours(series, now) -> float`. Hours from the oldest priced point to `now`.
   - `undercut(price:int) -> int`. Returns `max(1, price − 1)`.
@@ -126,7 +150,10 @@ tests/test_*.py                one test file per module
   - `score(profit:int, cost:int, days:float) -> float`. Equals `(profit / cost) / max(days, 1/24)`, or 0.0 if cost ≤ 0.
   - `sureness(hours:float, sold_per_day:float) -> float`. Equals `min(1, hours/48) × min(1, sold_per_day / (4 × MIN_SALES_PER_DAY))`.
 
-- [ ] **Step 1: Write `pyproject.toml` and the package files.** `pyproject.toml` declares `name = "wow-invest"`, `requires-python = ">=3.12"`, `dependencies = []`, `[dependency-groups] dev = ["pytest>=8"]`, `[tool.pytest.ini_options] testpaths = ["tests"]`. Add a `tests/conftest.py` that provides `NOW = datetime(2026, 11, 11, 12, tzinfo=UTC)` and a helper `pts(spec)` that builds `Point`s from `(hours_ago, units, min_ask, partial, early)` tuples.
+- [ ] **Step 1: Write `pyproject.toml` and the package files.** `pyproject.toml` declares `name = "wow-invest"`, `requires-python = ">=3.12"`, `dependencies = []`, `[dependency-groups] dev = ["pytest>=8"]`, `[tool.pytest.ini_options] testpaths = ["tests"]`. Add a `tests/conftest.py` that provides:
+  - `NOW = datetime(2026, 11, 11, 12, tzinfo=UTC)`
+  - a helper `pts(spec)` that builds `Point`s from `(hours_ago, units, min_ask, partial, early)` tuples
+  - `steady`: points at ages **0 to 47 inclusive**, each with units 300, min_ask 20000, partial 0 and early 4. That's 24 points in `[0, 24)`, so 48 effective sales a day.
 
 - [ ] **Step 2: Write the failing tests in `tests/test_pricing.py`**
 
@@ -168,7 +195,7 @@ def test_deposit_uses_house_rate_and_handles_none():
 
 - [ ] **Step 5: Run the tests to make sure they pass.** Run `uv run pytest tests/test_pricing.py -q`. Expected: all pass.
 
-- [ ] **Step 6: Commit.** Run `git add -A && git commit -m "feat: scaffold, config, models and pricing math"`.
+- [ ] **Step 6: Commit.** Run `git add <this task's Files> && git commit -m "feat: scaffold, config, models and pricing math"`.
 
 ---
 
@@ -183,12 +210,16 @@ def test_deposit_uses_house_rate_and_handles_none():
 - Produces:
   - `class ApiError(Exception)`
   - `class Client`, with `__init__(self, fetch=None, sleep=time.sleep, clock=time.monotonic)`. `fetch(url, headers) -> bytes` defaults to a `urllib.request` call with a 20 s timeout. It is injectable for tests.
-  - `Client.get_json(path:str) -> dict|list`. It waits until `REQUEST_GAP_S` has passed since the previous request, and retries on `URLError`, HTTP 5xx, 429 and bad JSON, sleeping `RETRY_DELAYS_S`. After the last failure it raises `ApiError`. A 404 raises `ApiError` immediately.
-  - `Client.captured_at() -> dict[str, str]`. Maps `"alliance"`/`"blackwater"` to their `captured_at`, from `/v1/markets`, matching on `region`, `ruleset_id` and `house_id`.
+  - `Client.get_json(path:str) -> dict|list`. It waits until `REQUEST_GAP_S` has passed since the previous request, and retries on `URLError`, HTTP 5xx, 429 and bad JSON, sleeping `RETRY_DELAYS_S`. On a 429 it sleeps for `Retry-After` when that header is present. After the last failure it raises `ApiError`. A 404 raises `ApiError` immediately.
+  - `Client.scan_times() -> dict[str, tuple[str, str]]`. Maps `"alliance"`/`"blackwater"` to `(captured_at, auctions_at)` from `/v1/markets`, matching on `region`, `ruleset_id` and `house_id`.
   - `Client.all_items(house) -> list[Row]`. Pages `/v1/markets/{key}/items?limit=200&offset=N` until it has `total`.
   - `Client.deals(house, limit=100) -> tuple[list[int], float]`. Returns the item ids from `/deals?limit=…` and `auction_cut`.
-  - `Client.item_detail(house, item_id) -> Detail`. Takes `cut` from `/deals?limit=1` once per house per client, cached.
-  - Module-level parsers `parse_row(d:dict) -> Row` and `parse_detail(d:dict, house:str, cut:float) -> Detail`. Prices are rounded to int copper. `None` stays `None`. Missing counts become 0. `series` nulls in `partial_fills` and `early_disappearances` become 0. `ladder` is sorted by price.
+  - `Client.item_detail(house, item_id, cut:float) -> Detail`. One request; the caller passes the cut it got from `deals`.
+  - Module-level parsers `parse_row(d:dict) -> Row` and `parse_detail(d:dict, house:str, cut:float) -> Detail`.
+    - Prices are rounded to int copper. `None` stays `None`. Missing counts become 0.
+    - `series` nulls in `partial_fills` and `early_disappearances` become 0.
+    - `ladder` is sorted by price.
+    - An unknown id comes back as HTTP 200 with `item: {id, name: null}` and no `purchase_price`. That parses to a `Detail` with `purchase_price=0`, an empty ladder and an empty series. It must not raise.
 
 - [ ] **Step 1: Write the failing tests in `tests/test_api.py`.** Use a `FakeFetch` that returns queued bytes or raises, and a fake `sleep` that records delays.
 
@@ -204,7 +235,9 @@ def test_get_json_retries_5xx_then_succeeds(): ...                 # 503, 503, o
 def test_get_json_raises_after_three_failures(): ...               # bad JSON ×4 → ApiError
 def test_get_json_404_raises_without_retry(): ...                  # one fetch call only
 def test_all_items_pages_until_total(): ...                        # total 450 → offsets 0, 200, 400 requested; 450 rows
-def test_captured_at_maps_both_houses(): ...                       # from a /v1/markets sample with 111 and 117 entries
+def test_scan_times_maps_both_houses(): ...                        # from a /v1/markets sample with 111 and 117 entries → (captured_at, auctions_at)
+def test_parse_detail_unknown_item_does_not_raise(): ...           # {"item": {"id": 1, "name": None}} → purchase_price 0, empty ladder/series
+def test_get_json_honours_retry_after_on_429(): ...                # 429 with Retry-After: 30 → sleep(30) recorded
 def test_requests_send_generic_user_agent(): ...                   # headers["User-Agent"] == config.USER_AGENT
 ```
 
@@ -217,12 +250,12 @@ def test_requests_send_generic_user_agent(): ...                   # headers["Us
 - [ ] **Step 5: Do a live check once, by hand.** Run:
 
 ```
-uv run python -c "from wow_invest.api import Client; c=Client(); print(c.captured_at()); d=c.item_detail('alliance', 15417); print(d.cut, d.ladder[:2], len(d.series))"
+uv run python -c "from wow_invest.api import Client; c=Client(); print(c.scan_times()); ids,cut=c.deals('alliance',5); d=c.item_detail('alliance', 15417, cut); print(d.cut, d.ladder[:2], len(d.series))"
 ```
 
 Expected: two timestamps, `0.05`, two ladder tuples, and a series length > 0.
 
-- [ ] **Step 6: Commit.** Run `git add -A && git commit -m "feat: polite API client and parsers"`.
+- [ ] **Step 6: Commit.** Run `git add <this task's Files> && git commit -m "feat: polite API client and parsers"`.
 
 ---
 
@@ -237,29 +270,33 @@ Expected: two timestamps, `0.05`, two ladder tuples, and a series length > 0.
 - Produces:
   - `connect(path:str) -> sqlite3.Connection`. Creates the parent directory, turns on WAL, sets `row_factory = sqlite3.Row`, and creates the schema below if it's missing. `":memory:"` is allowed.
   - Schema:
-    - `scans(id INTEGER PRIMARY KEY, house TEXT, captured_at TEXT, cut REAL, UNIQUE(house, captured_at))`
+    - `scans(id INTEGER PRIMARY KEY, house TEXT, captured_at TEXT, auctions_at TEXT, cut REAL, crowd TEXT, UNIQUE(house, captured_at))`. `crowd` is `"lo-hi"` on Alliance scans, which keeps the crowd's history.
     - `snapshots(scan_id INTEGER, item_id INTEGER, min_ask INTEGER, units INTEGER, sold_24h INTEGER, PRIMARY KEY(scan_id, item_id))`
     - `items(item_id INTEGER PRIMARY KEY, name, icon, quality, class_name, subclass_name, required_level, item_level, vendor_sell, purchase_price, purchase_quantity, static_done INTEGER DEFAULT 0)`
     - `picks(id INTEGER PRIMARY KEY, created_at TEXT, kind TEXT, item_id INTEGER, sell_at TEXT, qty INTEGER, cost INTEGER, sell_price INTEGER, profit INTEGER, sell_by TEXT, judged_at TEXT, hit INTEGER)`
-    - `holdings(id INTEGER PRIMARY KEY, item_id INTEGER, kind TEXT, qty INTEGER, price_paid INTEGER, bought_at TEXT, sell_by TEXT, sold_at TEXT)`
+    - `holdings(id INTEGER PRIMARY KEY, item_id INTEGER, kind TEXT, qty INTEGER, price_paid INTEGER, target INTEGER, bought_at TEXT, sell_by TEXT, sold_at TEXT)`
     - `settings(key TEXT PRIMARY KEY, value TEXT)`
     - `vendor_confirmed(item_id INTEGER PRIMARY KEY)`
   - All timestamps are stored as ISO-8601 UTC strings.
   - `last_captured(conn, house) -> str|None`
-  - `save_scan(conn, house, captured_at, cut, rows:list[Row]) -> int`. One transaction that inserts the scan and snapshots and upserts `items` names, icons and levels. It never overwrites a non-null value with null.
+  - `save_scan(conn, house, captured_at, auctions_at, cut, rows:list[Row]) -> int`. One transaction that inserts the scan and snapshots and upserts `items` names, icons and levels. It never overwrites a non-null value with null.
+  - `set_scan_crowd(conn, scan_id, crowd:tuple[int,int])`
   - `rows_at(conn, house, hours_ago:float, now) -> dict[int, tuple[int|None,int,int]]`. From the newest scan at least `hours_ago` old, maps `item_id` to `(min_ask, units, sold_24h)`.
-  - `missing_static(conn, limit:int) -> list[int]`. Items not yet `static_done`, highest latest `sold_24h` first.
-  - `save_static(conn, d:Detail)`
+  - `missing_static(conn, limit:int) -> list[int]`. Items with `static_done = 0`, highest latest `sold_24h` first.
+  - `save_static(conn, d:Detail)`. Sets `static_done = 1`.
+  - `mark_static_bad(conn, item_id)`. Sets `static_done = -1`, so a failing id isn't retried every hour.
   - `static(conn, item_id) -> sqlite3.Row|None`
   - `set_setting(conn, key, value:str)` and `get_setting(conn, key, default=None) -> str|None`
   - `get_gold(conn) -> int`. Copper, default 0. `set_gold(conn, copper:int)`
-  - `add_holding(conn, item_id, kind, qty, price_paid, now, sell_by) -> int`, `mark_sold(conn, holding_id, now)`, `open_holdings(conn) -> list[Holding]`
-  - `held_units(conn) -> dict[tuple[int,str], int]`. Open holdings summed by `(item_id, kind)`.
+  - `add_holding(conn, item_id, kind, qty, price_paid, target, now, sell_by) -> int`, `mark_sold(conn, holding_id, now)`, `open_holdings(conn) -> list[Holding]`
+  - `held_units(conn) -> dict[int, int]`. Open holdings summed by `item_id`, across all kinds.
   - `confirm_vendor(conn, item_id)` and `confirmed_vendors(conn) -> set[int]`
   - `save_candidates(conn, picks:list[Pick], captured_at:str)` and `load_candidates(conn) -> tuple[list[Pick], str|None]`. Stored as JSON in `settings["candidates"]`, with datetimes as ISO strings.
-  - `record_picks(conn, picks:list[Pick], now) -> int`. Inserts into `picks`, skipping any `(item_id, kind)` that already has an unjudged row. Returns how many were inserted.
+  - `record_picks(conn, picks:list[Pick], now) -> int`. Inserts into `picks`, skipping any `(item_id, kind)` that already has an unjudged row. Since rows are judged only after sell-by, that blocks re-recording until the earlier window has closed. Returns how many were inserted.
   - `open_picks(conn) -> list[sqlite3.Row]`, `judge_pick(conn, pick_id, hit:bool, now)`
-  - `hit_stats(conn) -> dict`. Keys are `{"judged", "hits", "hold_judged", "hold_hits"}`.
+  - `hit_stats(conn) -> dict`. Keys:
+    - `judged` and `hits`, counted over all time
+    - `hold_judged`, `hold_hits`, `hold_items` (distinct item ids) and `hold_days` (distinct `created_at` dates), counted over the last `PROVEN_RECENT` judged holds
   - `prune(conn, now, days=30)`. Deletes snapshots and scans older than 30 days. Add the comment `# shortcut: fixed 30-day retention, make configurable if history analysis needs more`.
 
 - [ ] **Step 1: Write the failing tests in `tests/test_db.py`** (all on `:memory:`).
@@ -269,10 +306,11 @@ def test_save_scan_is_idempotent_per_captured_at(): ...       # second save with
 def test_save_scan_keeps_known_name_when_row_has_null(): ...  # name "Linen Cloth" then None → still "Linen Cloth"
 def test_rows_at_picks_newest_scan_old_enough(): ...           # scans at now-30h and now-1h; rows_at(24) → the -30h values
 def test_gold_roundtrip_and_default(): assert get_gold(c) == 0; set_gold(c, 8000000); assert get_gold(c) == 8000000
-def test_holdings_add_sell_and_held_units(): ...                # add 2 holdings same item → held_units sums; mark_sold one → drops
+def test_holdings_add_sell_and_held_units(): ...                # a flip and a hold of the same item → held_units[item] sums both; mark_sold one → drops
 def test_record_picks_skips_item_kind_with_open_pick(): ...     # record twice → second returns 0; after judge_pick → records again
 def test_candidates_roundtrip_preserves_datetimes(): ...
-def test_hit_stats_counts_holds_separately(): ...
+def test_hit_stats_counts_recent_holds_items_and_days(): ...    # 25 judged holds → only the last 20 counted; hold_items/hold_days distinct
+def test_mark_static_bad_excludes_from_missing_static(): ...
 ```
 
 - [ ] **Step 2: Run the tests to make sure they fail.** Run `uv run pytest tests/test_db.py -q`. Expected: an ImportError.
@@ -281,7 +319,7 @@ def test_hit_stats_counts_holds_separately(): ...
 
 - [ ] **Step 4: Run the tests to make sure they pass.** Run `uv run pytest tests/test_db.py -q`.
 
-- [ ] **Step 5: Commit.** Run `git add -A && git commit -m "feat: sqlite storage"`.
+- [ ] **Step 5: Commit.** Run `git add <this task's Files> && git commit -m "feat: sqlite storage"`.
 
 ---
 
@@ -294,7 +332,7 @@ def test_hit_stats_counts_holds_separately(): ...
 **Interfaces:**
 - Produces, in `tables.py`:
   - `GATHER_BANDS: dict[int, tuple[int,int]]`. Maps an item id to the zone level band, for every classic herb and ore, e.g. Mageroyal `785: (10, 25)`. Check every id with `/v1/markets/eu/2/111/search?q=<name>` before adding it, and comment each line with the item name.
-  - `VENDOR_ITEMS: set[int]`. A starter list of items sold by NPC vendors the Alliance can reach, e.g. trade-supply goods and limited recipes. Confirm each one's `purchase_price` with `/items/{id}`, and comment each id with its name and vendor.
+  - `VENDOR_ITEMS: dict[int, int|None]`. Maps an item id to the vendor's limited stock per restock, or `None` if the stock is unlimited. It's a starter list of items sold by NPC vendors the Alliance can reach, e.g. trade-supply goods and limited recipes. Confirm each one's `purchase_price` with `/items/{id}`, and comment each id with its name and vendor.
 - Produces, in `crowd.py`:
   - `estimate_crowd(rows:list[Row]) -> tuple[int,int]`. Takes the weighted 25th and 75th percentiles of `required_level`, weighted by `sold_24h`. A weighted percentile q is the lowest level whose running weight is ≥ q × total weight. It only counts rows with `class_name` in `{"Armor", "Weapon"}`, `required_level > 0` and `sold_24h > 0`. It returns `CROWD_PRIOR` when the total weight is below `CROWD_MIN_SALES`.
   - `item_band(item_id:int, required_level:int|None) -> tuple[int,int]|None`. Returns `GATHER_BANDS[item_id]` if the item is listed. Otherwise, for `required_level > 0`, returns `(max(1, r − 2), r + 3)`. Otherwise `None`.
@@ -318,7 +356,7 @@ def test_gather_bands_are_sane(): assert all(1 <= lo < hi <= 60 for lo, hi in GA
 - [ ] **Step 2: Run the tests to make sure they fail.** Run `uv run pytest tests/test_crowd.py -q`.
 - [ ] **Step 3: Implement `crowd.py` and fill in `tables.py`.** Look up and verify the ids as described above.
 - [ ] **Step 4: Run the tests to make sure they pass.** Run `uv run pytest tests/test_crowd.py -q`.
-- [ ] **Step 5: Commit.** Run `git add -A && git commit -m "feat: crowd estimate and gather/vendor tables"`.
+- [ ] **Step 5: Commit.** Run `git add <this task's Files> && git commit -m "feat: crowd estimate and gather/vendor tables"`.
 
 ---
 
@@ -332,17 +370,18 @@ def test_gather_bands_are_sane(): assert all(1 <= lo < hi <= 60 for lo, hi in GA
 - Consumes: `pricing.*`, `crowd.item_band`, `crowd.overlaps`, `config`, and the models.
 - Every builder below returns `None` when:
   - the item's history is shorter than `MIN_HISTORY_HOURS`, or
+  - any `change()` it needs returns `None`, or
   - effective sales per day are below `MIN_SALES_PER_DAY`, or
   - its `qty` comes out as 0, or
   - its `sure` is below `SURE_MIN`.
 
-  A builder never filters on minimum profit; the planner does that. Every builder fills in `reason` with one plain sentence that names the numbers.
+  A builder never filters on minimum profit; the planner does that. Every builder fills in `reason` with one plain sentence that names the numbers, and sets `spd`, `trend` and `depth`.
 - Produces:
   - `quick_flip(row:Row, d:Detail, held:int, now) -> Pick|None`. Here `d` is the Alliance detail and `row.vendor_sell` feeds `deposit`.
     - `going = going_price(d.series, now)`.
     - Reject if `change(min_ask) < FALLING`, unless `change(units) < 0` and the sales in the last 24h are at least 0.9 × the sales 24–48h ago.
     - Buy from `d.ladder` up to `BUY_BELOW × going`, with `max_qty = max_units(spd, held)`.
-    - `sell_price = undercut(going)`. Profit uses `net_proceeds` with `d.cut` and the Alliance deposit.
+    - `sell_price = undercut(min(going, cheapest ladder price left after the buy))`, so the listing sits under the existing wall. Profit uses `net_proceeds` with `d.cut` and the Alliance deposit.
     - `kind = "flip"`, `buy_at = sell_at = "alliance"`.
     - `sell_by = now + max(1 day, ceil(days) days)`.
   - `cross_flip(row:Row, buy:Detail, sell:Detail, held:int, now) -> Pick|None`. Same as above, except:
@@ -352,7 +391,11 @@ def test_gather_bands_are_sane(): assert all(1 <= lo < hi <= 60 for lo, hi in GA
     - `kind = "cross"`, `buy_at = buy.house`, `sell_at = sell.house`
   - `vendor_flip(row:Row, d:Detail, held:int, confirmed:set[int], now) -> Pick|None`.
     - Unit cost is `ceil(purchase_price / purchase_quantity)`.
-    - If the item is in `VENDOR_ITEMS` or in `confirmed`, return `kind="vendor"` with `buy_at="vendor"`, `sell_at="alliance"`, `qty = max_units(spd, held)`, and `sell_by` as for `quick_flip`.
+    - If the item is in `VENDOR_ITEMS` or in `confirmed`, return `kind="vendor"` with:
+      - `buy_at="vendor"`, `sell_at="alliance"`
+      - `qty = max_units(spd, held)`, further capped by the `VENDOR_ITEMS` stock limit when there is one
+      - `sell_by` as for `quick_flip`
+      - `sell_price` as for `quick_flip`, against the full Alliance ladder
     - Else, if `going ≥ VENDOR_CHECK_RATIO × unit cost`, return `kind="vendor_check"` with the same numbers.
     - Else return `None`.
   - `hold(row:Row, d:Detail, crowd:tuple[int,int], held:int, now) -> Pick|None`.
@@ -361,16 +404,19 @@ def test_gather_bands_are_sane(): assert all(1 <= lo < hi <= 60 for lo, hi in GA
     - Sales holding: sales in the last 24h ≥ 0.9 × sales 24–48h ago.
     - `current = going_price(d.series, now, hours=6)`, `pre = window_median(24, 48, "min_ask")`, `target = round(current + HOLD_RECOVERY × (pre − current))`.
     - Buy from the ladder at ≤ `current`, `max_qty = max_units(spd, held)`. `sell_price = target`.
-    - `kind = "hold"`, `sell_by = now + HOLD_DAYS days`, `days = min(HOLD_DAYS, days_to_sell)`.
+    - `kind = "hold"`, `sell_by = now + HOLD_DAYS days`, `days = min(HOLD_DAYS, 1 + days_to_sell)`. The extra day accounts for the recovery, so a hold is never scored as selling instantly.
 - Use one test helper `detail(series=..., ladder=..., cut=0.05, house="alliance", purchase_price=0, purchase_quantity=1)`. Use the steady series `steady = 48 hourly points, units 300, min_ask 20000, partial 0, early 4`; its effective sales are 48/day.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_quick_flip_buys_below_80pct_and_prices_after_cut_and_deposit():
+def test_quick_flip_buys_below_80pct_and_lists_under_remaining_wall():
     p = quick_flip(row(vendor_sell=500), detail(series=steady, ladder=[(12000,10),(15000,5),(19900,100)]), held=0, now=NOW)
-    assert (p.kind, p.qty, p.cost, p.sell_price, p.profit) == ("flip", 15, 195000, 19999, 88860)
+    # going 20000, cheapest left 19900 → sell 19899; int(19899*15*0.95)=283560 − 75*15 = 282435 − 195000
+    assert (p.kind, p.qty, p.cost, p.sell_price, p.profit) == ("flip", 15, 195000, 19899, 87435)
     assert p.days == pytest.approx(0.625)
+def test_quick_flip_lists_under_going_when_wall_is_higher(): ...    # ladder [(12000,10),(25000,50)] → sell_price 19999
+def test_builders_return_none_without_24_48h_window(): ...         # 20 hourly points (ages 0–19): history ≥ 12h but change() is None → None
 def test_quick_flip_rejects_falling_price_with_rising_units(): ...   # 24-48h at 30000/200 units, last 6h 20000/400 → None
 def test_quick_flip_allows_falling_price_when_units_shrink_and_sales_hold(): ...
 def test_quick_flip_none_with_thin_history(): ...                   # 6 hourly points → None
@@ -381,6 +427,7 @@ def test_hold_targets_half_recovery_and_three_day_sell_by():
     # Mageroyal 785, crowd (20, 30); 24-48h: min 100, units 1000; last 6h: min 60, units 1500; sales steady
     p = hold(row(item_id=785), detail(series=flood, ladder=[(60, 500)]), crowd=(20, 30), held=0, now=NOW)
     assert (p.kind, p.sell_price, p.sell_by) == ("hold", 80, NOW + timedelta(days=3))
+    assert p.days >= 1.0
 def test_hold_none_for_endgame_band(): ...                          # row required_level 50 → band (48, 53), crowd (45, 52) → None
 def test_hold_none_when_sales_fall_with_price(): ...
 ```
@@ -388,7 +435,7 @@ def test_hold_none_when_sales_fall_with_price(): ...
 - [ ] **Step 2: Run the tests to make sure they fail.** Run `uv run pytest tests/test_picks.py -q`.
 - [ ] **Step 3: Implement `picks.py`.** Put the shared middle steps in one private helper `_build(...)`: sales, cap, ladder buy, proceeds, days, score and sure.
 - [ ] **Step 4: Run the tests to make sure they pass.** Run `uv run pytest tests/test_picks.py -q`.
-- [ ] **Step 5: Commit.** Run `git add -A && git commit -m "feat: flip, cross, vendor and hold pick builders"`.
+- [ ] **Step 5: Commit.** Run `git add <this task's Files> && git commit -m "feat: flip, cross, vendor and hold pick builders"`.
 
 ---
 
@@ -401,11 +448,16 @@ def test_hold_none_when_sales_fall_with_price(): ...
 **Interfaces:**
 - Consumes: `Pick`, `Plan`, `Holding`, `config`.
 - Produces:
-  - `holds_proven(judged:int, hits:int) -> bool`. Equals `judged ≥ PAPER_MIN_JUDGED and hits / judged ≥ PAPER_MIN_HIT`.
+  - `holds_proven(stats:dict) -> bool`. Takes `db.hit_stats` output. True when:
+    - `hold_judged ≥ PAPER_MIN_JUDGED`
+    - `hold_hits / hold_judged ≥ PAPER_MIN_HIT`
+    - `hold_items ≥ PROVEN_MIN_ITEMS`
+    - `hold_days ≥ PROVEN_MIN_DAYS`
+  - `best_per_item(picks:list[Pick]) -> list[Pick]`. Keeps the highest-score pick for each `item_id`. The scanner also uses this before saving.
   - `plan(candidates:list[Pick], gold:int, holdings:list[Holding], proven:bool) -> Plan`. In order:
-    1. Drop picks with `profit < MIN_PROFIT`.
+    1. Drop picks with `profit < MIN_PROFIT`, then apply `best_per_item`.
     2. Send `vendor_check` to `checks`. Send `hold` to `paper` unless `proven`. The rest is the ranked pool.
-    3. Sort the pool by `score` descending and keep `TOP_N`. Sort `paper` and `checks` by score too, and keep `TOP_N` of each.
+    3. Sort the pool by `score` descending and keep `TOP_N`. Sort `paper` by score and keep `TOP_N`. Sort `checks` by score and keep `CHECKS_N`.
     4. Fund top-down from `gold`:
        - A pick that fits is `funded=True`.
        - A pick that doesn't fit is scaled to `qty' = floor(qty × remaining / cost)`, with cost and profit scaled by `qty' / qty`. It's kept as funded only if the scaled profit is ≥ `MIN_PROFIT`. Otherwise it's left unfunded at its original size. Add the comment `# shortcut: linear scaling ignores ladder steps, fine for partial fills`.
@@ -430,13 +482,19 @@ def test_holds_go_to_paper_until_proven(): ...
 def test_proven_holds_capped_at_quarter_including_open_holds(): ...          # gold 1000g, open hold 200g → cap 0.25 × 1200g = 300g → max new hold cost 100g
 def test_vendor_check_never_funded(): ...
 def test_holds_proven_thresholds():
-    assert holds_proven(10, 7) and not holds_proven(9, 9) and not holds_proven(10, 6)
+    ok = dict(judged=0, hits=0, hold_judged=10, hold_hits=7, hold_items=5, hold_days=3)
+    assert holds_proven(ok)
+    assert not holds_proven({**ok, "hold_judged": 9, "hold_hits": 9})
+    assert not holds_proven({**ok, "hold_hits": 6})
+    assert not holds_proven({**ok, "hold_items": 4})    # one lucky item can't prove the idea
+    assert not holds_proven({**ok, "hold_days": 2})
+def test_best_per_item_keeps_highest_score(): ...    # flip and cross for the same item → only the higher score kept
 ```
 
 - [ ] **Step 2: Run the tests to make sure they fail.** Run `uv run pytest tests/test_planner.py -q`.
 - [ ] **Step 3: Implement `planner.py`.** Copy picks with `dataclasses.replace`; never mutate the input.
 - [ ] **Step 4: Run the tests to make sure they pass.** Run `uv run pytest tests/test_planner.py -q`.
-- [ ] **Step 5: Commit.** Run `git add -A && git commit -m "feat: gold-fitted planner with paper holds"`.
+- [ ] **Step 5: Commit.** Run `git add <this task's Files> && git commit -m "feat: gold-fitted planner with paper holds"`.
 
 ---
 
@@ -448,25 +506,26 @@ def test_holds_proven_thresholds():
 
 **Interfaces:**
 - Consumes: `db.open_picks`, `db.judge_pick`, and the snapshots and scans tables.
-- Produces `judge(conn, now) -> int`, which returns how many picks were judged. For each open pick:
-  - It's a **hit** at the first snapshot of `sell_at`'s house, after `created_at` and no later than `sell_by`, where `min_ask ≥ sell_price`. That means the cheapest listing has reached the target, so the user could have sold there.
-  - It's a **miss** when `now > sell_by` and there was no hit.
-  - Otherwise it stays open.
+- Produces `judge(conn, now) -> int`, which returns how many picks were judged.
+  - Only picks with `now > sell_by` are judged; everything else stays open. This keeps hits and misses on the same clock, so the hit rate can't be inflated by quick hits.
+  - A pick is a **hit** if the snapshots of `sell_at`'s house between `created_at` and `sell_by` include a run of at least `JUDGE_RUN` consecutive snapshots with `min_ask ≥ sell_price`. That means the price really held at the target, not one hourly spike.
+  - Otherwise it's a **miss**.
   - `vendor_check` picks are never recorded, so they're never judged.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_hit_when_min_ask_reaches_target_before_sell_by(): ...   # target 20000; snapshots 18000 @+2h, 20500 @+5h → hit
+def test_hit_needs_three_consecutive_snapshots_at_target(): ...  # target 20000; 18000, 20500, 20600, 20100 then sell_by passes → hit
+def test_single_spike_is_a_miss(): ...                            # 18000, 20500, 18000, 20500, 18000 → miss
 def test_miss_when_sell_by_passes(): ...                          # target 30000 never reached, now > sell_by → hit == 0
-def test_open_until_sell_by(): ...                                # not reached, now < sell_by → stays unjudged
+def test_not_judged_before_sell_by_even_if_reached(): ...         # three snapshots at target but now < sell_by → stays open
 def test_only_snapshots_of_sell_house_count(): ...                # Blackwater reaching target doesn't count for an Alliance sale
 ```
 
 - [ ] **Step 2: Run the tests to make sure they fail.** Run `uv run pytest tests/test_tracker.py -q`.
 - [ ] **Step 3: Implement `tracker.py`.** Use one SQL query per pick, joining `snapshots` to `scans` on house and the time window.
 - [ ] **Step 4: Run the tests to make sure they pass.** Run `uv run pytest tests/test_tracker.py -q`.
-- [ ] **Step 5: Commit.** Run `git add -A && git commit -m "feat: judge past picks for hit rate"`.
+- [ ] **Step 5: Commit.** Run `git add <this task's Files> && git commit -m "feat: judge past picks for hit rate"`.
 
 ---
 
@@ -477,24 +536,27 @@ def test_only_snapshots_of_sell_house_count(): ...                # Blackwater r
 - Test: `tests/test_scanner.py`
 
 **Interfaces:**
-- Consumes: `api.Client`, `api.ApiError`, `db.*`, `picks.*`, `crowd.estimate_crowd`, `planner` (not called here), `tracker.judge`.
+- Consumes: `api.Client`, `api.ApiError`, `db.*`, `picks.*`, `crowd.estimate_crowd`, `crowd.item_band`, `planner.best_per_item`, `tracker.judge`.
 - Produces:
   - `run_cycle(client, conn, now) -> str`, which returns `"no-change"`, `"stale"`, `"done"` or `"error"`. In order:
-    1. `cap = client.captured_at()`. If both houses equal `db.last_captured`, return `"no-change"`.
-    2. Fetch `client.all_items` and `client.deals` for both houses before writing anything. On `ApiError`, return `"error"` without saving.
-    3. Save both houses with `db.save_scan`.
-    4. If either `captured_at` is older than `STALE_HOURS`, set `settings["stale"] = "1"`, run `tracker.judge`, and return `"stale"` without building picks. Otherwise set `stale` to `"0"`.
-    5. Backfill static data: up to `STATIC_PER_CYCLE` ids from `db.missing_static`, via `client.item_detail("alliance", id)` and `db.save_static`.
-    6. `crowd = estimate_crowd(alliance rows)`. Store it as `settings["crowd"] = "lo-hi"`.
-    7. Choose the candidate ids, deduplicated, in this order, stopping once `DETAIL_PER_CYCLE` detail calls have been made:
-       - the deal ids for Alliance and Blackwater
-       - Blackwater rows with `min_ask ≤ BUY_BELOW × Alliance min_ask`
-       - `VENDOR_ITEMS` plus confirmed vendor items
-       - items whose `item_band` overlaps the crowd and whose units rose by `FLOOD_UNITS_RISE` against `db.rows_at(24h)`
-       - static items whose `purchase_price` is greater than 0 and ≤ the Alliance `min_ask` ÷ `VENDOR_CHECK_RATIO`
-    8. For each candidate, fetch the Alliance detail. Fetch the Blackwater detail too when it's a cross candidate, in either direction. Run every builder that applies, passing `held` from `db.held_units`.
-    9. Call `db.save_candidates(all non-None picks sorted by score, alliance captured_at)`. Call `db.record_picks` on everything except `vendor_check`. Call `tracker.judge`, then `db.prune`. Return `"done"`.
-  - Any `ApiError` from step 5 onward ends the cycle with `"error"`. Data already committed stays, and candidates are not replaced.
+    1. `times = client.scan_times()`. If both houses' `captured_at` equal `db.last_captured`, return `"no-change"`.
+    2. Fetch `client.all_items` and `client.deals` for both houses before writing anything. Keep each house's cut from `deals`. On `ApiError`, return `"error"` without saving.
+    3. Save both houses with `db.save_scan`, including `auctions_at`.
+    4. If either `auctions_at` is older than `STALE_HOURS`, set `settings["stale"] = "1"`, run `tracker.judge`, and return `"stale"` without building picks. Otherwise set `stale` to `"0"`.
+    5. Backfill static data: up to `STATIC_PER_CYCLE` ids from `db.missing_static`, via `client.item_detail("alliance", id, cut)` and `db.save_static`. If an id raises `ApiError`, mark it with `db.mark_static_bad` and continue.
+    6. `crowd = estimate_crowd(alliance rows)`. Store it with `db.set_scan_crowd` on the Alliance scan and in `settings["crowd"] = "lo-hi"`.
+    7. **Pre-screen:** a candidate row must have `0.5 × sold_24h ≥ MIN_SALES_PER_DAY` on the house it would sell on.
+    8. **Choose candidates** per category, each up to its own quota in `DETAIL_QUOTAS`, deduplicated across categories in this order: `cross`, `vendor`, `hold`, then `flip`. Each category, highest `sold_24h` first:
+       - `cross`: Blackwater rows with `min_ask ≤ BUY_BELOW × Alliance min_ask`, and Alliance rows with `min_ask ≤ BUY_BELOW × Blackwater min_ask`
+       - `vendor`: `VENDOR_ITEMS` plus confirmed vendor items, then static items whose `purchase_price` is greater than 0 and ≤ the Alliance `min_ask` ÷ `VENDOR_CHECK_RATIO`
+       - `hold`: items whose `item_band` overlaps the crowd, whose band's high end is below `HOLD_ENDGAME_LEVEL`, and whose units rose by `FLOOD_UNITS_RISE` against `db.rows_at(24h)`
+       - `flip`: Alliance deal ids
+    9. For each candidate, fetch the detail for the house it sells on. Cross candidates also need the house they buy on. Run the builders for that candidate's category; a `flip` candidate also tries `vendor_flip`. Pass `held` from `db.held_units()[item_id]`.
+       - An `ApiError` on one candidate skips that candidate.
+       - `MAX_ERRORS_IN_ROW` consecutive errors end the cycle with `"error"`. Data already committed stays, and candidates are not replaced.
+    10. Apply `planner.best_per_item` to all non-None picks, then call `db.save_candidates(sorted by score, alliance captured_at)`.
+    11. Record only what the page could show: picks with `profit ≥ MIN_PROFIT`, the top `TOP_N` non-hold picks (excluding `vendor_check`) plus the top `TOP_N` holds, all by score. Call `db.record_picks` on those.
+    12. Call `tracker.judge`, then `db.prune`. Return `"done"`.
   - `loop(client_factory, db_path, stop:threading.Event)`. It opens its own connection, calls `run_cycle` every `POLL_MINUTES`, logs the result with `logging`, and keeps running after any exception (logged with traceback).
 
 - [ ] **Step 1: Write the failing tests.** Use a `FakeClient` built from small dict fixtures; it counts calls.
@@ -503,14 +565,16 @@ def test_only_snapshots_of_sell_house_count(): ...                # Blackwater r
 def test_no_change_when_captured_at_unchanged(): ...      # second run → "no-change", no all_items calls
 def test_error_before_save_leaves_db_untouched(): ...      # all_items raises ApiError for blackwater → "error", no scans rows
 def test_done_saves_candidates_and_records_picks(): ...    # fixture with one clear quick flip → load_candidates has it
-def test_detail_calls_capped(): ...                        # 200 deal ids → item_detail called ≤ DETAIL_PER_CYCLE (+ static)
-def test_stale_site_data_saves_scan_but_no_new_picks(): ...  # captured_at 3h old → "stale", candidates unchanged
+def test_detail_quotas_leave_room_for_every_kind(): ...    # 200 deal ids + 30 cross rows → item_detail calls for flips ≤ 25, cross candidates still fetched
+def test_stale_site_data_saves_scan_but_no_new_picks(): ...  # auctions_at 3h old → "stale", candidates unchanged
+def test_one_bad_item_is_skipped_not_fatal(): ...          # item_detail raises for one static id → marked bad, cycle "done"
+def test_records_only_showable_picks(): ...                # a 1g-profit pick is a candidate but not recorded
 ```
 
 - [ ] **Step 2: Run the tests to make sure they fail.** Run `uv run pytest tests/test_scanner.py -q`.
 - [ ] **Step 3: Implement `scanner.py`.**
 - [ ] **Step 4: Run the tests to make sure they pass.** Run `uv run pytest tests/test_scanner.py -q`.
-- [ ] **Step 5: Commit.** Run `git add -A && git commit -m "feat: hourly scan cycle"`.
+- [ ] **Step 5: Commit.** Run `git add <this task's Files> && git commit -m "feat: hourly scan cycle"`.
 
 ---
 
@@ -523,10 +587,17 @@ def test_stale_site_data_saves_scan_but_no_new_picks(): ...  # captured_at 3h ol
 **Interfaces:**
 - Consumes: `db.*`, `planner.plan`, `planner.holds_proven`, `pricing.undercut`.
 - Produces:
-  - `fmt_money(copper:int) -> str`. Returns HTML spans with classes `g`/`s`/`c`, leaving out zero parts. `fmt_money(25050)` contains `2g` and `50s` and no `c`. `fmt_money(0)` returns `0c`.
+  - `fmt_money(copper:int) -> str`. Returns HTML spans with classes `g`/`s`/`c`, leaving out zero parts. `fmt_money(25000)` contains `2g` and `50s` and no copper span. `fmt_money(0)` returns `0c`.
   - `parse_gold(text:str) -> int`. Accepts `800`, `800.5`, `800g`, `800g 50s` and `1 234`, and returns copper. Raises `ValueError` if the text is empty, negative, not a number, or over 10,000,000g.
   - `safe_icon(url:str|None) -> str|None`. Returns the URL only if it starts with `https://render.worldofwarcraft.com/`.
-  - `build_state(conn, now) -> dict`. Gathers gold, candidates and their `captured_at`, `plan(...)` with `proven = holds_proven(stats["hold_judged"], stats["hold_hits"])`, open holdings with the current Alliance `min_ask` per item, crowd, stale flag, hit stats, and the next expected scan.
+  - `build_state(conn, now) -> dict`. Gathers:
+    - gold
+    - candidates and their `captured_at`
+    - `plan(...)` with `proven = holds_proven(db.hit_stats(conn))`
+    - open holdings with the current Alliance `min_ask` per item
+    - crowd, stale flag and hit stats
+    - data age from the latest Alliance `auctions_at`
+    - the next expected scan
   - `render_page(state:dict, error:str|None=None) -> str`
     - Uses `page.html` through `string.Template`. Every API-supplied string goes through `html.escape`.
     - The name falls back to `Item {id}`.
@@ -534,7 +605,9 @@ def test_stale_site_data_saves_scan_but_no_new_picks(): ...  # captured_at 3h ol
     - Sections, top to bottom:
       - the stats frame: gold form, suggested spend, expected profit, crowd, last scan, hit rate
       - **Buy in this order**: numbered rows as in the mockup, with an unfunded pick dimmed and labelled "not enough gold", and each row's `<details>` holding the reason, sales per day and sell-by
-      - **Sell now**: holdings sorted by sell-by, each with a suggested price `undercut(current min_ask)` and a Sold button
+      - **Sell now**: holdings sorted by sell-by, each with a suggested price of `max(undercut(current min_ask), target)` and a Sold button.
+        - If the current price is below break-even, the row says "below cost — wait until sell-by" instead of suggesting a sale. Break-even per unit is `ceil(price_paid / qty / (1 − cut))` plus the deposit.
+        - Once sell-by has passed, it shows `undercut(current min_ask)`, labelled with the loss.
       - **On paper**
       - **Check a vendor**, each row with a "A vendor sells this" button
     - Banners:
@@ -544,13 +617,14 @@ def test_stale_site_data_saves_scan_but_no_new_picks(): ...  # captured_at 3h ol
   - `make_server(db_path:str, port:int) -> ThreadingHTTPServer`, bound to `127.0.0.1`. Routes:
     - `GET /` and `GET /static/style.css`
     - `POST /gold` (`gold`)
-    - `POST /bought` (`item_id`, `kind`, `qty`, `price_paid` in gold text, `sell_by`)
+    - `POST /bought` (`item_id`, `kind`, `qty`, `price_paid` in gold text, `target` in copper, `sell_by`)
     - `POST /sold` (`holding_id`)
     - `POST /vendor-confirm` (`item_id`)
 
     Every POST:
     - answers 303 to `/` on success, or re-renders with `error` and status 400 on a `ValueError`
     - is rejected with 403 if an `Origin` header is present and isn't `http://127.0.0.1:<port>` or `http://localhost:<port>`
+    - Every request, GET too, is rejected with 403 if the `Host` header isn't `127.0.0.1:<port>` or `localhost:<port>`. This stops a DNS-rebinding page from reading or changing your holdings.
     - uses a new `db.connect` per request
 
   - `style.css` is the mockup's `.bw` rules, moved to top-level selectors, plus styles for the form, buttons, `.unfunded`, banners and the `details` element.
@@ -558,7 +632,11 @@ def test_stale_site_data_saves_scan_but_no_new_picks(): ...  # captured_at 3h ol
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_fmt_money(): assert "2g" in fmt_money(25050) and "50s" in fmt_money(25050) and "c<" not in fmt_money(25050)
+def test_fmt_money():
+    assert "2g" in fmt_money(25000) and "50s" in fmt_money(25000) and 'class="c"' not in fmt_money(25000)
+    assert 'class="c"' in fmt_money(25050)   # 2g 50s 50c
+def test_sell_now_never_suggests_below_cost_before_sell_by(): ...
+def test_foreign_host_header_rejected(server): ...                   # Host: evil.example:8765 → 403
 def test_parse_gold_accepts_and_rejects():
     assert parse_gold("800") == 8_000_000 and parse_gold("800g 50s") == 8_005_000 and parse_gold("1 234") == 12_340_000
     for bad in ["", "-5", "abc", "1e99"]:
@@ -577,7 +655,7 @@ def test_bought_then_sold_updates_holdings(server): ...
 - [ ] **Step 2: Run the tests to make sure they fail.** Run `uv run pytest tests/test_web.py -q`.
 - [ ] **Step 3: Implement `web.py`, `page.html` and `style.css`.** For the server fixture, call `make_server(tmp_db, 0)` and run `serve_forever` in a daemon thread.
 - [ ] **Step 4: Run the tests to make sure they pass.** Run `uv run pytest tests/test_web.py -q`.
-- [ ] **Step 5: Commit.** Run `git add -A && git commit -m "feat: bronze priority page with holdings and paper holds"`.
+- [ ] **Step 5: Commit.** Run `git add <this task's Files> && git commit -m "feat: bronze priority page with holdings and paper holds"`.
 
 ---
 
@@ -612,4 +690,4 @@ def test_bought_then_sold_updates_holdings(server): ...
   - Bought and Sold work
 
   If the history is too short for picks, the "Gathering price history" banner shows instead. That's expected on the first run, because the item `series` holds about 3 days already.
-- [ ] **Step 6: Commit and push.** Run `git add -A && git commit -m "feat: entry point and README" && git push`.
+- [ ] **Step 6: Commit and push.** Run `git add <this task's Files> && git commit -m "feat: entry point and README" && git push`.
