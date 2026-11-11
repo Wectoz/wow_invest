@@ -551,9 +551,13 @@ def test_only_snapshots_of_sell_house_count(): ...                # Blackwater r
        - `vendor`: `VENDOR_ITEMS` plus confirmed vendor items, then static items whose `purchase_price` is greater than 0 and ≤ the Alliance `min_ask` ÷ `VENDOR_CHECK_RATIO`
        - `hold`: items whose `item_band` overlaps the crowd, whose band's high end is below `HOLD_ENDGAME_LEVEL`, and whose units rose by `FLOOD_UNITS_RISE` against `db.rows_at(24h)`
        - `flip`: Alliance deal ids
-    9. For each candidate, fetch the detail for the house it sells on. Cross candidates also need the house they buy on. Run the builders for that candidate's category; a `flip` candidate also tries `vendor_flip`. Pass `held` from `db.held_units()[item_id]`.
-       - An `ApiError` on one candidate skips that candidate.
-       - `MAX_ERRORS_IN_ROW` consecutive errors end the cycle with `"error"`. Data already committed stays, and candidates are not replaced.
+    9. For each candidate, fetch the detail for the house it sells on. Cross candidates also need the house they buy on.
+       - Every candidate that sells on Alliance runs `quick_flip`, `vendor_flip` and `hold` on the cached Alliance detail; cross candidates also run `cross_flip`. The planner dedupes, so the extra builders cost no requests.
+       - Pass `held` from `db.held_units(conn).get(item_id, 0)`.
+       - `ApiError` has a `transient` flag. Transport failures after retries are transient; a 404 or a wrong-shape response is not.
+       - A non-transient error skips that candidate, or marks that static id bad.
+       - Only `MAX_ERRORS_IN_ROW` transient errors in a row end the cycle with `"error"`. Data already committed stays, and candidates are not replaced.
+       - Any other exception from a builder is logged, and that candidate is skipped.
     10. Call `db.save_candidates(all non-None picks sorted by score, alliance captured_at)`. Don't dedupe across kinds here; the planner does that.
     11. Record only what the page could show: `p = planner.plan(candidates, gold=0, holdings=[], proven=False)`, then `db.record_picks(p.ranked + p.paper, now)`. That's the same filtering, dedupe and top-N the page uses. `vendor_check` is never recorded.
     12. Call `tracker.judge`, then `db.prune`. Return `"done"`.
@@ -613,7 +617,7 @@ def test_records_only_showable_picks(): ...                # a 1g-profit pick is
     - Banners:
       - "Gathering price history…" when there are no candidates and no scan older than `MIN_HISTORY_HOURS`
       - "Site data is stale" when `stale == "1"`
-      - "Last scan N minutes ago" when the last successful scan is more than 90 minutes old
+      - "Last scan N minutes ago" when the last successful scan is more than 90 minutes old. Judge this from the candidates' `captured_at`, not from the scans table: a cycle that errors after saving its scan leaves older candidates behind.
   - `make_server(db_path:str, port:int) -> ThreadingHTTPServer`, bound to `127.0.0.1`. Routes:
     - `GET /` and `GET /static/style.css`
     - `POST /gold` (`gold`)
