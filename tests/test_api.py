@@ -109,10 +109,22 @@ def test_parse_detail_unknown_item_does_not_raise():
 def test_get_json_honours_retry_after_on_429():
     c, _, sleeps = client(http(429, 30), {"ok": 1})
     c.get_json("/x")
-    assert 30 in sleeps
+    assert 30 in sleeps and 2 not in sleeps
 
 
 def test_requests_send_generic_user_agent():
     c, f, _ = client({"ok": 1})
     c.get_json("/x")
     assert f.calls[0][1]["User-Agent"] == config.USER_AGENT
+
+
+def test_wrong_shape_items_response_is_api_error():
+    c, _, _ = client({"error": "x"})
+    with pytest.raises(ApiError):
+        c.all_items("alliance")
+
+
+def test_item_detail_bad_timestamp_is_api_error():
+    c, _, _ = client({"item": {"id": 1}, "series": [{"captured_at": "garbage"}]})
+    with pytest.raises(ApiError):
+        c.item_detail("alliance", 1, 0.05)

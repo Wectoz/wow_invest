@@ -45,6 +45,16 @@ def parse_detail(d, house, cut):
                   sell_price=it.get("sell_price") or 0, required_level=it.get("required_level"))
 
 
+def _shaped(fn):
+    """Wrong-shape JSON (error object, missing key, bad timestamp) becomes ApiError."""
+    def wrap(self, *a, **k):
+        try:
+            return fn(self, *a, **k)
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            raise ApiError(f"unexpected response in {fn.__name__}{a}: {e!r}") from e
+    return wrap
+
+
 class Client:
     def __init__(self, fetch=None, sleep=time.sleep, clock=time.monotonic):
         self._fetch, self._sleep, self._clock, self._last = fetch or _fetch, sleep, clock, None
@@ -75,6 +85,7 @@ class Client:
                 raise ApiError(f"giving up on {path}: {err}") from err
             self._sleep(retry_after if retry_after is not None else delay)
 
+    @_shaped
     def scan_times(self):
         out = {}
         for m in self.get_json("/v1/markets"):
@@ -84,6 +95,7 @@ class Client:
                     out[name] = (m["captured_at"], m["auctions_at"])
         return out
 
+    @_shaped
     def all_items(self, house):
         key, rows, offset = config.HOUSES[house], [], 0
         while True:
@@ -93,9 +105,11 @@ class Client:
             if offset >= d["total"] or not d["items"]:
                 return rows
 
+    @_shaped
     def deals(self, house, limit=100):
         d = self.get_json(f"/v1/markets/{config.HOUSES[house]}/deals?limit={limit}")
         return [x["item_id"] for x in d["items"]], d["auction_cut"]
 
+    @_shaped
     def item_detail(self, house, item_id, cut):
         return parse_detail(self.get_json(f"/v1/markets/{config.HOUSES[house]}/items/{item_id}"), house, cut)
