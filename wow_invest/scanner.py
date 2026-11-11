@@ -138,10 +138,16 @@ def run_cycle(client, conn, now) -> str:
 
 
 def loop(client_factory, db_path, stop):
-    conn, client = db.connect(db_path), client_factory()
+    conn, client, wait = None, client_factory(), c.POLL_MINUTES
     while not stop.is_set():
         try:
-            log.info("scan cycle: %s", run_cycle(client, conn, datetime.now(UTC)))
+            if conn is None:
+                conn = db.connect(db_path)
+            result = run_cycle(client, conn, datetime.now(UTC))
+            log.info("scan cycle: %s", result)
         except Exception:
             log.exception("scan cycle failed")
-        stop.wait(c.POLL_MINUTES * 60)
+            result = "error"
+        # back off while things keep failing, so a down site is not polled every few minutes
+        wait = min(2 * wait, 60) if result == "error" else c.POLL_MINUTES
+        stop.wait(wait * 60)

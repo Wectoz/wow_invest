@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 import threading
 from collections import Counter
 from dataclasses import replace
@@ -266,6 +267,44 @@ def test_records_only_showable_picks():
     assert sorted((p.kind, p.item_id) for p in picks) == [("flip", FLIP), ("flip", small), ("vendor_check", check)]
     assert [p.score for p in picks] == sorted((p.score for p in picks), reverse=True)
     assert recorded(conn) == [("flip", FLIP)]
+
+
+class FakeStop:
+    """Records each wait; is set after `n` waits."""
+
+    def __init__(self, n):
+        self.n, self.waits = n, []
+
+    def is_set(self):
+        return len(self.waits) >= self.n
+
+    def wait(self, timeout):
+        self.waits.append(timeout)
+
+
+def test_loop_doubles_wait_after_errors_up_to_an_hour_and_resets(monkeypatch, tmp_path):
+    results = iter(["error", "error", "error", "error", "error", "no-change", "error", "done"])
+    monkeypatch.setattr(scanner, "run_cycle", lambda client, conn, now: next(results))
+    stop = FakeStop(8)
+    scanner.loop(lambda: "client", str(tmp_path / "w.db"), stop)
+    assert stop.waits == [m * 60 for m in (10, 20, 40, 60, 60, 5, 10, 5)]
+
+
+def test_loop_retries_db_connect_after_the_wait(monkeypatch, tmp_path, caplog):
+    real, tries = db.connect, []
+
+    def connect(path):
+        tries.append(path)
+        if len(tries) == 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real(path)
+
+    monkeypatch.setattr(db, "connect", connect)
+    monkeypatch.setattr(scanner, "run_cycle", lambda client, conn, now: "done")
+    stop = FakeStop(3)
+    scanner.loop(lambda: "client", str(tmp_path / "w.db"), stop)
+    assert len(tries) == 2  # failed once, then connected and kept the connection
+    assert stop.waits == [600, 300, 300] and "OperationalError: disk I/O error" in caplog.text
 
 
 def test_loop_logs_errors_and_keeps_going(monkeypatch, tmp_path, caplog):
