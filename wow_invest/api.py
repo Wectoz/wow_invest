@@ -41,7 +41,8 @@ def parse_detail(d, house, cut):
                     if x.get("unit_price_copper") is not None)
     series = [Point(at=datetime.fromisoformat(s["captured_at"]), units=s.get("units") or 0,
                     min_ask=_int(s.get("minimum_ask_copper")), partial_fills=s.get("partial_fills") or 0,
-                    early=s.get("early_disappearances") or 0) for s in d.get("series") or []]
+                    early=s.get("early_disappearances") or 0, new_units=s.get("new_units") or 0)
+              for s in d.get("series") or []]
     return Detail(item_id=it["id"], house=house, ladder=ladder, series=series, cut=cut,
                   purchase_price=it.get("purchase_price") or 0, purchase_quantity=it.get("purchase_quantity") or 1,
                   sell_price=it.get("sell_price") or 0, required_level=it.get("required_level"))

@@ -27,6 +27,7 @@ class Point:
     min_ask: int | None
     partial_fills: int
     early: int
+    new_units: int = 0
 
 
 @dataclass(slots=True)

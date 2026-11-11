@@ -42,7 +42,9 @@ def change(series, now, field) -> float | None:
 
 
 def _sales(series, now, start_h, end_h) -> float:
-    return sum(p.partial_fills + c.SOLD_OR_CANCELLED_WEIGHT * p.early
+    """Likely sold, plus a share of the early disappearances that new listings did not replace:
+    an hour with as many new units as early disappearances is mostly sellers cancelling and relisting."""
+    return sum(p.partial_fills + c.SOLD_OR_CANCELLED_WEIGHT * max(0, p.early - p.new_units)
                for p in series if start_h <= _age_h(p, now) < end_h)
 
 

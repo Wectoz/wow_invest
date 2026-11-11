@@ -43,10 +43,13 @@ def test_parse_detail_sorts_ladder_and_zeroes_null_counts():
     d = parse_detail({"item": {"id": 5, "purchase_price": 2000, "purchase_quantity": 1, "sell_price": 500, "required_level": 0},
                       "ladder": [{"units": 3, "unit_price_copper": 200.0}, {"units": 1, "unit_price_copper": 100.0}],
                       "series": [{"captured_at": "2026-11-08T20:13:51.301379+00:00", "units": 4, "minimum_ask_copper": None,
-                                  "partial_fills": None, "early_disappearances": None}]}, "alliance", 0.05)
+                                  "partial_fills": None, "early_disappearances": None, "new_units": None},
+                                 {"captured_at": "2026-11-08T21:13:51+00:00", "units": 4, "minimum_ask_copper": 9.0,
+                                  "partial_fills": 1, "early_disappearances": 8, "new_units": 7}]}, "alliance", 0.05)
     assert d.ladder == [(100, 1), (200, 3)]
     p = d.series[0]
-    assert (p.partial_fills, p.early, p.min_ask, p.at.utcoffset().total_seconds()) == (0, 0, None, 0)
+    assert (p.partial_fills, p.early, p.new_units, p.min_ask, p.at.utcoffset().total_seconds()) == (0, 0, 0, None, 0)
+    assert (d.series[1].early, d.series[1].new_units) == (8, 7)
     assert (d.cut, d.house, d.purchase_price) == (0.05, "alliance", 2000)
 
 
