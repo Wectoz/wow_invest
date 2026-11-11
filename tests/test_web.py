@@ -70,6 +70,7 @@ def test_render_null_name_falls_back():
 def test_render_empty_state_says_gathering_history():
     h = state_html(seed(":memory:", captured=NOW))
     assert "Gathering price history" in h and 'http-equiv="refresh"' in h
+    assert "Picks can appear after the first scan cycle (a few minutes)" in h and "Holds need about a day" in h
 
 
 def test_no_gathering_banner_when_history_long_enough():

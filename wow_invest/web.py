@@ -230,8 +230,8 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     if error:
         ban.append(f'<div class="banner err">{esc(error)}</div>')
     if state["gathering"]:
-        ban.append('<div class="banner">Gathering price history… picks appear once about '
-                   f'{C.MIN_HISTORY_HOURS} hours of scans exist.</div>')
+        ban.append('<div class="banner">Gathering price history… Picks can appear after the first scan cycle '
+                   '(a few minutes), since the site already keeps price history. Holds need about a day of scans.</div>')
     if state["stale"]:
         ban.append('<div class="banner">Site data is stale: the auction snapshot is old, so no new picks are saved.</div>')
     if state["scan_age_min"] is not None and state["scan_age_min"] > 90:

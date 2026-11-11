@@ -20,8 +20,8 @@ Enter the gold you have on the page, and it suggests a spend. Mark what you boug
 
 ## Good to know
 
-- For the first few hours the page may show "Gathering price history". It needs history before it can judge a price.
-- Holds stay "on paper" until they have proven themselves: 10 judged, a 70% hit rate, across 5 items and 3 days.
+- On first start the page shows "Gathering price history". Picks can appear after the first scan cycle (a few minutes), because the site already keeps price history. Holds need about a day of the program's own scans.
+- Holds stay "on paper" until their price has held at target often enough: 10 judged, 70% of them, across 5 items and 3 days.
 - The listing-deposit rates are a guess. Check them in game.
 
 ## Tests
