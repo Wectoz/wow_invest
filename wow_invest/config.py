@@ -1,0 +1,40 @@
+"""Every constant and threshold. Money is integer copper (1g = 10000)."""
+
+BASE_URL = "https://blackwater.exchange"
+HOUSES = {"alliance": "eu/2/111", "blackwater": "eu/2/117"}
+USER_AGENT = "ah-helper/0.1"
+REQUEST_GAP_S = 1.0
+RETRY_DELAYS_S = (2, 4, 8)
+POLL_MINUTES = 5
+STALE_HOURS = 2
+MIN_PROFIT = 30000
+TOP_N = 15
+CAPTURE_SHARE = 0.5
+MAX_SALES_DAYS = 2.5
+SOLD_OR_CANCELLED_WEIGHT = 0.5
+BUY_BELOW = 0.80
+FALLING = -0.10
+FLOOD_UNITS_RISE = 0.25
+MIN_HISTORY_HOURS = 12
+MIN_SALES_PER_DAY = 5.0
+SURE_MIN = 0.4
+HOLD_RECOVERY = 0.5
+HOLD_DAYS = 3
+HOLD_MAX_SHARE = 0.25
+HOLD_ENDGAME_LEVEL = 50
+PAPER_MIN_JUDGED = 10
+PAPER_MIN_HIT = 0.70
+VENDOR_CHECK_RATIO = 2.0
+CROWD_PRIOR = (20, 30)
+CROWD_MIN_SALES = 200
+STATIC_PER_CYCLE = 60
+DETAIL_QUOTAS = {"flip": 25, "cross": 20, "vendor": 10, "hold": 25}
+MAX_ERRORS_IN_ROW = 3
+CHECKS_N = 5
+JUDGE_RUN = 3
+PROVEN_RECENT = 20
+PROVEN_MIN_ITEMS = 5
+PROVEN_MIN_DAYS = 3
+# Fraction of vendor sell price per unit for a 24h listing.
+# shortcut: classic-style guess, verify by listing one item in game
+DEPOSIT_RATE = {"alliance": 0.15, "blackwater": 0.75}
