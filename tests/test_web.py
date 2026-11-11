@@ -113,11 +113,11 @@ def test_bought_form_defaults():
     assert 'action="/bought"' in h
 
 
-def sell_html(min_ask, sell_by, paid=10000, target=15000, vendor_sell=None, house="alliance", cut=0.05):
+def sell_html(min_ask, sell_by, paid=10000, target=15000, vendor_sell=None, house="alliance", cut=0.05, kind="hold"):
     c = seed(":memory:")
     db.save_scan(c, house, NOW.isoformat(), NOW.isoformat(), cut,
                  [Row(5, "Ore", ICON, "Common", None, None, 1, 1, min_ask, min_ask, 3, 1, 1, vendor_sell)])
-    db.add_holding(c, 5, "hold", 1, paid, target, NOW - timedelta(days=1), sell_by, house)
+    db.add_holding(c, 5, kind, 1, paid, target, NOW - timedelta(days=1), sell_by, house)
     return state_html(c)
 
 
@@ -132,6 +132,15 @@ def test_sell_now_never_suggests_below_cost_before_sell_by():
     assert "below cost" not in h and listing(undercut(20000)) in h and "now " + fmt_money(20000) in h
     h = sell_html(11000, NOW + timedelta(days=1), target=19000)  # break-even 10527
     assert listing(19000) in h
+
+
+def test_sell_now_flips_list_under_the_market_not_at_target():
+    # break-even ceil(10000 / 0.95) = 10527; a hold would list at its 19000 target here
+    h = sell_html(11000, NOW + timedelta(days=1), target=19000, kind="flip")
+    assert listing(undercut(11000)) in h and listing(19000) not in h
+    h = sell_html(10527, NOW + timedelta(days=1), kind="cross")  # undercut 10526 < 10527
+    assert "below cost — wait until sell-by" in h and "list at" not in h
+    assert "sell-by passed: " + listing(undercut(8000)) in sell_html(8000, NOW - timedelta(hours=1), kind="vendor")
 
 
 def test_sell_now_after_sell_by_and_unlisted():

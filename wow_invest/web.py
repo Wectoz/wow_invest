@@ -87,6 +87,8 @@ def sell_advice(h, current: int | None, cut: float, dep: int, now: datetime) -> 
     breakeven = math.ceil(h.price_paid / h.qty / (1 - cut)) + dep
     if h.sell_by is not None and now >= h.sell_by:
         return "loss", undercut(current)
+    if h.kind != "hold":  # a flip sells under the competition; listed above it, it would not sell
+        return ("list", undercut(current)) if undercut(current) >= breakeven else ("wait", None)
     if current < breakeven:
         return "wait", None
     return "list", max(undercut(current), h.target)
