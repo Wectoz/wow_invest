@@ -29,7 +29,8 @@ def test_keeps_top_15_by_score():
 
 
 def test_funds_top_down_and_partially_fills_next():
-    a, b = pk(cost=500_000, profit=200_000, score=2.0), pk(qty=10, cost=1_000_000, profit=400_000, score=1.0)
+    a = pk(cost=500_000, profit=200_000, score=2.0)
+    b = pk(kind="cross", qty=10, cost=1_000_000, profit=400_000, score=1.0)
     out = plan([a, b], gold=1_000_000, holdings=[], proven=False)
     assert [p.funded for p in out.ranked] == [True, True]
     assert (out.ranked[1].qty, out.ranked[1].cost, out.ranked[1].profit) == (5, 500_000, 200_000)
@@ -37,14 +38,21 @@ def test_funds_top_down_and_partially_fills_next():
     assert b.qty == 10 and not b.funded  # input untouched
 
 
+def test_quick_flip_is_never_partially_filled():
+    # buying part of a quick flip leaves cheaper units of the same ladder under our listing
+    f = pk(kind="flip", qty=10, cost=1_000_000, profit=400_000)
+    out = plan([f], gold=500_000, holdings=[], proven=False)
+    assert (out.ranked[0].funded, out.ranked[0].qty, out.spend) == (False, 10, 0)
+
+
 def test_partial_fill_below_min_profit_stays_unfunded():
-    b = pk(qty=10, cost=1_000_000, profit=400_000)
+    b = pk(kind="cross", qty=10, cost=1_000_000, profit=400_000)
     out = plan([b], 200_000, [], False)  # 2 units -> profit 80000 >= MIN, funded
     assert out.ranked[0].funded
     out = plan([b], 50_000, [], False)  # 0 units
     p = out.ranked[0]
     assert not p.funded and (p.qty, p.cost, p.profit) == (10, 1_000_000, 400_000)
-    b2 = pk(qty=10, cost=1_000_000, profit=40_000)
+    b2 = pk(kind="cross", qty=10, cost=1_000_000, profit=40_000)
     out = plan([b2], 500_000, [], False)  # 5 units -> 20000 < MIN
     assert not out.ranked[0].funded and out.ranked[0].qty == 10 and out.spend == 0
 

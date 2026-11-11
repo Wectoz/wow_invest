@@ -190,6 +190,8 @@ def load_candidates(conn) -> tuple[list[Pick], str | None]:
         return [], None
     try:  # saved by an older version: drop unknown keys, let defaults fill the rest, give up on missing ones
         d = json.loads(raw)
+        if any("listed" not in p for p in d["picks"]):  # saved before the supply cap: sized under old rules
+            return [], None
         return [Pick(**{**{k: v for k, v in p.items() if k in _PICK_FIELDS}, "sell_by": _dt(p.get("sell_by"))})
                 for p in d["picks"]], d["captured_at"]
     except (KeyError, TypeError, ValueError):

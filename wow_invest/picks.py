@@ -48,7 +48,8 @@ def _build(kind, row, sell, held, now, buy_at, why, going=0, ladder=None, limit=
     if hours < c.MIN_HISTORY_HOURS or spd < c.MIN_SALES_PER_DAY or trend is None or sure < c.SURE_MIN:
         return None
     listed = listed_units(s, now)
-    cap = min(max_units(spd, held), math.floor(c.SUPPLY_SHARE * listed))  # what the sell house can absorb
+    # what the sell house can absorb, counting what we already hold of it
+    cap = min(max_units(spd, held), max(0, math.floor(c.SUPPLY_SHARE * listed) - held))
     dep = deposit(row.vendor_sell, sell.house)
 
     def price(left):

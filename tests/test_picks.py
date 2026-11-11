@@ -121,6 +121,17 @@ def test_high_churn_with_real_fills_is_capped_at_a_quarter_of_listed():
     assert (p.spd, p.listed, p.qty, p.cost, p.profit) == (1440, 400, 100, 1200000, 690405)
 
 
+def test_supply_cap_counts_units_already_held():
+    # same market: a quarter of 400 listed is 100; holding 60 leaves room for 40, holding 100 for none
+    s = pts([(h, 400, 20000, 50, 200, 180) for h in range(48)])
+    buy = detail(series=[], ladder=[(12000, 500)], cut=0.15, house="blackwater")
+    sell = detail(series=s, ladder=[(19900, 400)])
+    p = cross_flip(row(), buy, sell, held=60, now=NOW)
+    # int(19899 × 40 × 0.95) = 756162 − 480000
+    assert (p.qty, p.cost, p.profit) == (40, 480000, 276162)
+    assert cross_flip(row(), buy, sell, held=100, now=NOW) is None
+
+
 def test_cross_flip_buys_on_blackwater_sells_on_alliance_with_alliance_cut():
     buy = detail(series=[], ladder=WALL, cut=0.15, house="blackwater")  # buy series is never read
     sell = detail(series=steady, ladder=[(19500, 20)])

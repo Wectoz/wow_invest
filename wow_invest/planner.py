@@ -27,7 +27,9 @@ def _fit(p: Pick, limit: int) -> Pick:
     """Funded copy of p if it fits in limit (partially filled if needed), else p unchanged."""
     if p.cost <= limit:
         return replace(p, funded=True)
-    # shortcut: linear scaling ignores ladder steps, fine for partial fills
+    if p.kind == "flip":  # part of a quick flip leaves cheaper units of the same ladder under our listing
+        return p
+    # linear scaling over a cheapest-first ladder overstates cost, so the estimate errs safe
     q = p.qty * limit // p.cost if p.cost > 0 else 0
     profit = int(p.profit * q / p.qty) if p.qty else 0
     if q == 0 or profit < C.MIN_PROFIT:
