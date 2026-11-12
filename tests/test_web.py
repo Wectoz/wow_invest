@@ -462,3 +462,10 @@ def test_page_says_how_many_picks_the_profit_limits_hide(server):
     assert "more picks are hidden" not in req(base + "/")[1]
     assert req(base + "/min-profit", {"min_profit": "50g"})[0] == 303
     assert "1 more picks are hidden by the two profit limits" in req(base + "/")[1]
+
+
+def test_slow_sellers_have_their_own_tab():
+    c = seed(":memory:", [mkpick(1, "a-flip"), mkpick(2, "a-sword", kind="slow")])
+    slow, ah = state_html(c, tab="slow"), state_html(c, tab="ah")
+    assert "a-sword" in slow and "a-flip" not in slow and "Slow sellers <span>1</span>" in slow
+    assert "a-flip" in ah and "a-sword" not in ah

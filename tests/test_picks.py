@@ -229,3 +229,15 @@ def test_underpriced_lot_is_a_flip_even_while_the_price_falls():
     # a thin wall far above the usual price: it sells at the usual price, not the wall
     p = quick_flip(row(), detail(series=falling, ladder=[(60, 30), (500, 2)]), held=0, now=NOW)
     assert p.sell_price == 99
+
+
+def test_slow_seller_with_an_underpriced_piece_and_a_good_profit():
+    slow = pts([(h, 6, 50000, 0, 1 if h % 6 == 0 else 0) for h in range(48)])  # 2 sales a day: under the usual floor
+    lad = [(30000, 1), (50000, 1), (51300, 1)]
+    p = quick_flip(row(), detail(series=slow, ladder=lad), held=0, now=NOW)
+    assert (p.kind, p.qty, p.cost, p.sell_price) == ("slow", 1, 30000, 49999) and "expect to wait days" in p.reason
+    assert p.days == 1 and p.sure < 0.4  # the sure bar shows the risk
+    assert quick_flip(row(), detail(series=slow, ladder=[(48000, 1), (50000, 1)]), held=0, now=NOW) is None  # no gap
+    assert quick_flip(row(), detail(series=slow, ladder=lad), held=3, now=NOW) is None  # already holding three days of sales
+    cheap = pts([(h, 6, 3000, 0, 1 if h % 6 == 0 else 0) for h in range(48)])
+    assert quick_flip(row(), detail(series=cheap, ladder=[(2000, 1), (3000, 1)]), held=0, now=NOW) is None  # 8s: not worth the wait

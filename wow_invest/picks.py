@@ -39,17 +39,24 @@ def _left(ladder, qty):
     return left
 
 
-def _build(kind, row, sell, held, now, buy_at, why, going=0, ladder=None, limit=0, unit_cost=0, target=None):
+def _build(kind, row, sell, held, now, buy_at, why, going=0, ladder=None, limit=0, unit_cost=0, target=None,
+           slow=False):
     """Shared middle: sales, cap, buy, proceeds, days, score and sure, all on the sell house.
-    `ladder=None` means a vendor buy at `unit_cost`; `target=None` means list under the competition."""
+    `ladder=None` means a vendor buy at `unit_cost`; `target=None` means list under the competition.
+    `slow` is for slow sellers: a lower sales floor, a few pieces at most, and the sure bar shows the risk."""
     s = sell.series
     hours, spd, trend = history_hours(s, now), sales_per_day(s, now), change(s, now, "min_ask")
     sure = sureness(hours, spd)
-    if hours < c.MIN_HISTORY_HOURS or spd < c.MIN_SALES_PER_DAY or trend is None or sure < c.SURE_MIN:
+    if slow and spd >= c.MIN_SALES_PER_DAY and sure >= c.SURE_MIN:
+        return None  # sells fast enough for the ordinary rules, which already said no
+    floor = c.SLOW_MIN_SALES if slow else c.MIN_SALES_PER_DAY
+    if hours < c.MIN_HISTORY_HOURS or spd < floor or trend is None or (sure < c.SURE_MIN and not slow):
         return None
     listed = listed_units(s, now)
-    # what the sell house can absorb, counting what we already hold of it
-    cap = min(max_units(spd, held), max(0, math.floor(c.SUPPLY_SHARE * listed) - held))
+    if slow:
+        cap = max(0, max(1, math.floor(spd * c.CAPTURE_SHARE * c.SLOW_DAYS)) - held)
+    else:  # what the sell house can absorb, counting what we already hold of it
+        cap = min(max_units(spd, held), max(0, math.floor(c.SUPPLY_SHARE * listed) - held))
     dep = deposit(row.vendor_sell, sell.house)
 
     def price(left):
@@ -97,12 +104,14 @@ def _flip(kind, row, buy, sell, held, now):
                   limit=int(c.BUY_BELOW * going))
 
 
-def _snipe(row, d, held, now):
-    """Underpriced listings: a lot at least 20% under the next price on the ladder, small enough to
-    resell within hours. It is measured against the listings there now, not yesterday's price, so it
-    also holds while a price is falling."""
+def _snipe(row, d, held, now, slow=False):
+    """Underpriced listings: a lot well under the next price on the ladder, small enough to resell
+    soon. It is measured against the listings there now, not yesterday's price, so it also holds while
+    a price is falling. `slow` allows a slow seller: a few pieces, resold over days, for a good profit each."""
     going = going_price(d.series, now)
-    room = math.floor(sales_per_day(d.series, now) * c.CAPTURE_SHARE * c.SNIPE_DAYS)
+    spd = sales_per_day(d.series, now)
+    room = (max(1, math.floor(spd * c.CAPTURE_SHARE * c.SLOW_DAYS)) if slow
+            else math.floor(spd * c.CAPTURE_SHARE * c.SNIPE_DAYS))
     qty, found = 0, None
     for (price, units), (wall, _) in zip(d.ladder, d.ladder[1:]):
         qty += units
@@ -116,13 +125,18 @@ def _snipe(row, d, held, now):
     wall = min(wall, going)  # a thin wall far above the usual price is not the price it will sell at
 
     def why(top):
+        wait = "it sells slowly, so expect to wait days" if slow else "and few enough to resell within hours"
         return (f"Underpriced: listed at up to {_money(top)}, {1 - top / wall:.0%} under the next price of"
-                f" {_money(wall)}, and few enough to resell within hours")
-    return _build("flip", row, d, held, now, d.house, why, going=wall, ladder=d.ladder, limit=limit)
+                f" {_money(wall)}, {wait}")
+    p = _build("slow" if slow else "flip", row, d, held, now, d.house, why, going=wall, ladder=d.ladder,
+               limit=limit, slow=slow)
+    return None if p and slow and p.profit < c.SLOW_MIN_UNIT_PROFIT * p.qty else p
 
 
 def quick_flip(row, d, held, now):
-    return _flip("flip", row, d, d, held, now) or _snipe(row, d, held, now)
+    """A flip, or failing that a slow seller: the same underpriced lot of an item that sells under the usual floor."""
+    return (_flip("flip", row, d, d, held, now) or _snipe(row, d, held, now)
+            or _snipe(row, d, held, now, slow=True))
 
 
 def cross_flip(row, buy, sell, held, now):

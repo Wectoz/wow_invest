@@ -25,7 +25,7 @@ MAX_BODY = 10_240
 MAX_GOLD = 10_000_000
 KINDS = {"flip": ("Quick flip", "flip"), "cross": ("Cross-AH", "flip"), "hold": ("Hold", "hold"),
          "vendor": ("Vendor flip", "vendor"), "craft": ("Crafting", "vendor"), "rise": ("Forecast", "hold"),
-         "trend": ("Rising price", "hold")}
+         "trend": ("Rising price", "hold"), "slow": ("Slow seller", "flip")}
 # item type -> (label, the site's class names it covers; None = whatever the others leave)
 TYPES = {"gear": ("Gear", {"Armor", "Weapon"}), "mats": ("Materials", {"Trade Goods", "Reagent"}),
          "consumables": ("Consumables", {"Consumable"}), "recipes": ("Recipes", {"Recipe"}), "other": ("Other", None)}
@@ -34,6 +34,7 @@ SORTS = {"return": ("Best return", lambda p: -p.score), "profit": ("Most gold", 
          "fast": ("Fastest", lambda p: p.days)}
 # tab -> (label, the pick kinds it shows; None = all)
 TABS = {"all": ("All", None), "ah": ("AH flips", {"flip", "cross", "hold"}),
+        "slow": ("Slow sellers", {"slow"}),  # underpriced, but they sell under five a day
         "vendor": ("Vendor flips", {"vendor"}), "craft": ("Crafting", {"craft"}),
         "invest": ("Investments", {"hold", "rise", "trend"})}  # multi-day bets: these also list the paper picks
 QUALITY = {"uncommon": "green", "rare": "blue", "epic": "purple"}
@@ -379,7 +380,7 @@ def _int(text, name, lo, hi) -> int:
 
 def _bought(conn, f, now):
     kind = f.get("kind")
-    if kind not in ("flip", "cross", "vendor", "craft", "hold", "rise", "trend"):
+    if kind not in ("flip", "cross", "vendor", "craft", "hold", "rise", "trend", "slow"):
         raise ValueError("Unknown kind")
     try:
         sell_by = _aware(f.get("sell_by"))

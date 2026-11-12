@@ -445,3 +445,15 @@ def test_a_day_long_price_climb_becomes_a_paper_investment():
     assert (p.kind, p.sell_price, p.sell_by) == ("trend", 23000, NOW + timedelta(days=5))
     assert "the price is +100% against a day ago" in p.reason
     assert planner.plan([p], 10**9, [], True).ranked == []  # a bet: listed under Investments, never funded
+
+
+def test_underpriced_slow_seller_is_a_candidate_despite_few_sales():
+    sword = 100040
+    conn = db.connect(":memory:")
+    hour_ago = (NOW - timedelta(hours=1)).isoformat()
+    db.save_scan(conn, "alliance", hour_ago, hour_ago, 0.05, [row(sword, min_ask=50000, sold=4)])
+    slow = pts([(h, 6, 50000, 0, 1 if h % 6 == 0 else 0) for h in range(48)])
+    fc = FakeClient([row(sword, min_ask=30000, sold=4)],
+                    details={("alliance", sword): detail(sword, series=slow, ladder=[(30000, 1), (50000, 1)])})
+    assert run_cycle(fc, conn, NOW) == "done"
+    assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("slow", sword)]

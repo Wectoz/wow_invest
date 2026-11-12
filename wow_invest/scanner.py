@@ -60,7 +60,7 @@ def _choose(conn, rows, deal_ids, crowd, now):
     def by_sales(xs):
         return sorted(xs, key=lambda x: -x[1].sold_24h)
 
-    lists = {  # dedupe order: cross, vendor, hold, flip, rise
+    lists = {  # dedupe order: cross, vendor, hold, flip, rise, trend, slow
         "cross": by_sales([("alliance", r, "blackwater") for i, r in a.items()
                            if i in b and b[i].min_ask <= c.BUY_BELOW * r.min_ask]
                           + [("blackwater", r, "alliance") for i, r in b.items()
@@ -71,11 +71,16 @@ def _choose(conn, rows, deal_ids, crowd, now):
         + by_sales([("alliance", a[i], None) for i in deal_ids if i in a and i not in drops]),
         "rise": by_sales([("alliance", r, None) for r in a.values() if _behind(r, crowd)]),
         "trend": by_sales([("alliance", r, None) for r in a.values() if climbing(r)]),
+        # slow sellers (gear, recipes, dear items) fail the sales floor below: take the ones with the most
+        # gold between their cheapest listing and their own price
+        "slow": sorted([("alliance", a[i], None) for i in drops if a[i].sold_24h >= 2],
+                       key=lambda x: -(usual[x[1].item_id] - x[1].min_ask)),
     }
     taken, out = set(), []
     for kind, xs in lists.items():
         # pre-screen on the house the item sells on
-        xs = [x for x in xs if x[1].item_id not in taken and 0.5 * x[1].sold_24h >= c.MIN_SALES_PER_DAY]
+        xs = [x for x in xs if x[1].item_id not in taken
+              and (kind == "slow" or 0.5 * x[1].sold_24h >= c.MIN_SALES_PER_DAY)]
         xs = xs[:c.DETAIL_QUOTAS[kind]]
         taken |= {x[1].item_id for x in xs}
         out += [(kind, *x) for x in xs]
