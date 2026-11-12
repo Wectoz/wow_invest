@@ -38,7 +38,7 @@ def _fit(p: Pick, limit: int, min_profit: int) -> Pick:
 
 
 def plan(candidates: list[Pick], gold: int, holdings: list[Holding], proven: bool,
-         min_profit: int | None = None, min_unit: int | None = None) -> Plan:
+         min_profit: int | None = None, min_unit: int | None = None, top: int | None = None) -> Plan:
     min_profit = C.MIN_PROFIT if min_profit is None else min_profit
     min_unit = C.MIN_UNIT_PROFIT if min_unit is None else min_unit
     cands = [p for p in candidates if p.profit >= min_profit and p.profit >= min_unit * p.qty]
@@ -46,7 +46,8 @@ def plan(candidates: list[Pick], gold: int, holdings: list[Holding], proven: boo
     pool = best_per_item([p for p in cands if not is_paper(p)])
     # kept apart from the buys, so a multi-day bet on an item never hides (or is hidden by) a flip of it
     paper = best_per_item([p for p in cands if is_paper(p)])
-    ranked, paper = _top(pool, C.TOP_N), _top(paper, C.TOP_N)
+    top = C.TOP_N if top is None else top
+    ranked, paper = _top(pool, top), _top(paper, top)
 
     open_hold = sum(h.price_paid for h in holdings if h.kind == "hold" and h.sold_at is None)
     hold_room = C.HOLD_MAX_SHARE * (gold + open_hold) - open_hold

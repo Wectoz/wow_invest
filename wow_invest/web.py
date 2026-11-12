@@ -17,7 +17,7 @@ from . import config as C
 from . import db, scanner
 from .planner import holds_proven, plan
 from .pricing import deposit, undercut
-from .tables import PROFESSIONS, VENDOR_ITEMS
+from .tables import ITEM_INFO, PROFESSIONS, VENDOR_ITEMS
 
 HERE = Path(__file__).parent
 ICON_HOST = "https://render.worldofwarcraft.com/"
@@ -121,7 +121,7 @@ def build_state(conn, now: datetime) -> dict:
              and not (p.kind == "craft" and chosen and _profession(p) not in chosen)
              # a vendor pick saved before its item was known to be limited-stock
              and not (p.kind == "vendor" and VENDOR_ITEMS.get(p.item_id) is not None)]
-    kind = db.get_setting(conn, "type", "")
+    kind, untyped = db.get_setting(conn, "type", ""), fresh
     if kind in TYPES:
         fresh = [p for p in fresh if _type((db.static(conn, p.item_id) or {"class_name": None})["class_name"]) == kind]
     floor = int(db.get_setting(conn, "min_profit", str(C.MIN_PROFIT)))
@@ -155,8 +155,11 @@ def build_state(conn, now: datetime) -> dict:
         # the loading bar is paced by how long the last full scan took
         "scan_secs": int(db.get_setting(conn, "scan_secs", "360")), "scan_for": time.time() - scanner.started,
         "professions": chosen, "type": kind,
-        "filtered": len(plan(fresh, 0, holdings, holds_proven(stats), 0, 0).ranked) - len(p.ranked), "min_profit": floor, "min_unit": unit_floor, "hidden": len(hidden), "sort": db.get_setting(conn, "sort", "return"),
+        # the same picks without the profit limits, and without the item type filter as well: what each hides
+        "loose": plan(fresh, 0, holdings, holds_proven(stats), 0, 0, top=len(cands)),
+        "untyped": plan(untyped, 0, holdings, holds_proven(stats), 0, 0, top=len(cands)), "min_profit": floor, "min_unit": unit_floor, "hidden": len(hidden), "sort": db.get_setting(conn, "sort", "return"),
         "drift": db.get_setting(conn, "drift"), "real": db.real_results(conn, ali["cut"] if ali else 0.05), "skills": json.loads(db.get_setting(conn, "skills", "{}")),
+        "rep": json.loads(db.get_setting(conn, "rep", C.REP_DEFAULT)),
         "last_scan": last_ok, "scan_age_min": int((now - last_ok).total_seconds() // 60) if last_ok else None,
         "auctions_at": auctions, "data_age_min": int((now - auctions).total_seconds() // 60) if auctions else None,
         # scans run hourly (the site's cadence), so the next one is expected an hour after the last
@@ -178,6 +181,8 @@ def route(p) -> str:
 
 
 def _name(item_id, name) -> str:
+    if not name or name == f"Item {item_id}":  # the site had no name when this was saved
+        name = ITEM_INFO.get(item_id, (None,))[0]
     return esc(name) if name else f"Item {item_id}"
 
 
@@ -302,11 +307,14 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     tab = tab if tab in TABS else "all"
     sort = state["sort"] if state["sort"] in SORTS else "return"
 
-    def in_tab(k):
+    def in_tab(k, p=p):
         pool = p.ranked + p.paper if k == "invest" else p.ranked
         return [x for x in pool if TABS[k][1] is None or x.kind in TABS[k][1]]
 
     shown = sorted(in_tab(tab), key=SORTS[sort][1])
+    # counted for the open tab, so an empty tab says what emptied it
+    by_floor = len(in_tab(tab, state["loose"])) - len(shown)
+    by_type = len(in_tab(tab, state["untyped"])) - len(in_tab(tab, state["loose"]))
     funded_kinds = {x.kind for x in p.ranked}
     sorts = "".join(f'<button name="sort" value="{k}"{" class=\"on\"" if k == sort else ""}>{esc(v[0])}</button>'
                     for k, v in SORTS.items())
@@ -321,8 +329,10 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
                 f'name="min_profit" value="{esc(plain_gold(state["min_profit"]))}"></label><label>and per item <input type="text" '
                 f'class="qty" name="min_unit" value="{esc(plain_gold(state["min_unit"]))}"></label><button>Set</button></form>'
                 f'{unhide}</div>'
-                + (f'<div class="sub filtered">{state["filtered"]} more picks are hidden by the two profit limits above.</div>'
-                   if state["filtered"] > 0 else "")
+                + (f'<div class="sub filtered">{by_floor} more picks are hidden by the two profit limits above.</div>'
+                   if by_floor > 0 else "")
+                + (f'<div class="sub filtered">{by_type} more picks are hidden because only '
+                   f'{esc(TYPES[state["type"]][0])} is shown.</div>' if by_type > 0 else "")
                 + ('<div class="sub">Multi-day bets on price moves, not proven yet: the program does not spend your gold '
                    'on them, but you can buy and track them. Holds wait out a flood, forecasts bet on items the crowd '
                    'has levelled past, rising prices bet that a day-long climb continues. Price held at target — holds: '
@@ -356,7 +366,8 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     return Template((HERE / "page.html").read_text(encoding="utf-8")).substitute(
         css_href=esc(css_href), banners="".join(ban), here=f"/?tab={tab}",
         version=esc(_version(state)),
-        tabs=f'<nav class="tabs">{tabs}</nav>' + controls + (_profession_bar(state["professions"]) + _skills_form(state["skills"]) if tab == "craft" else ""), reload_s=5 if state["scanning"] else 300,
+        tabs=f'<nav class="tabs">{tabs}</nav>' + controls + (_profession_bar(state["professions"]) + _skills_form(state["skills"]) if tab == "craft" else "")
+        + (_rep_form(state["rep"]) if tab == "vendor" else ""), reload_s=5 if state["scanning"] else 300,
         refresh_off=" disabled" if state["scanning"] else "",
         sub=f'Alliance · Normal (PvE) · EU — {esc(" + ".join(HOUSE[h] for h in C.SCAN_HOUSES))} — {esc(age)}{esc(nxt)}',
         gold_text=esc(plain_gold(state["gold"])), spend=fmt_money(p.spend), profit=fmt_money(p.profit),
@@ -436,6 +447,20 @@ def _skills(conn, f, now):
     db.set_setting(conn, "skills", json.dumps(skills))
 
 
+def _rep(conn, f, now):
+    db.set_setting(conn, "rep", json.dumps({k: f[k] for k in C.REP_CITIES if f.get(k) in C.REP_DISCOUNT}))
+
+
+def _rep_form(rep: dict) -> str:
+    def select(k, city):
+        opts = "".join(f'<option{" selected" if rep.get(k) == s else ""}>{s}</option>' for s in C.REP_DISCOUNT)
+        return f'<label>{esc(city)} <select name="{k}"><option value="">Neutral</option>{opts}</select></label> '
+    return ('<details class="skills"><summary>My city reputations</summary><form class="boughtform" method="post" '
+            f'action="/rep">{"".join(select(k, v) for k, v in C.REP_CITIES.items())}<button>Save</button></form>'
+            '<p>Vendors of a city sell 5% cheaper at Friendly, 10% at Honored, 15% at Revered and 20% at Exalted. '
+            'Vendor prices use this from the next scan on (press Refresh picks).</p></details>')
+
+
 def _tab(url: str | None) -> str:
     """The tab named in a page URL, so a reload or a form post lands back on it."""
     tab = parse_qs(urlsplit(url or "").query).get("tab", ["all"])[0]
@@ -454,6 +479,7 @@ ROUTES = {
                                             parse_gold(f["price"]) if f.get("price", "").strip() else None),
     "/refresh": _refresh,
     "/skills": _skills,
+    "/rep": _rep,
     "/profession": _pick_profession,
     "/type": _pick_type,
     "/hide": _hide,

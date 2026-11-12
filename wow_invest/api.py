@@ -7,6 +7,7 @@ from datetime import datetime
 
 from . import config
 from .models import Detail, Point, Row
+from .tables import ITEM_ICON, ITEM_INFO
 
 
 class ApiError(Exception):
@@ -25,10 +26,13 @@ def _int(v):
 
 
 def parse_row(d):
+    name, cls, level = ITEM_INFO.get(d["id"], (None, None, None))  # for items the site has no data on
+    icon, quality = ITEM_ICON.get(d["id"], (None, None))
     return Row(
-        item_id=d["id"], name=d.get("name"), icon=d.get("icon"), quality=d.get("quality"),
-        class_name=d.get("class_name"), subclass_name=d.get("subclass_name"),
-        required_level=d.get("required_level"), item_level=d.get("item_level"),
+        item_id=d["id"], name=d.get("name") or name, icon=d.get("icon") or icon, quality=d.get("quality") or quality,
+        class_name=d.get("class_name") or cls, subclass_name=d.get("subclass_name"),
+        required_level=d.get("required_level") if d.get("required_level") is not None else level,
+        item_level=d.get("item_level"),
         min_ask=_int(d.get("minimum_ask_copper")), avg_ask=_int(d.get("average_ask_copper")),
         units=d.get("units") or 0, listings=d.get("listings") or 0, sold_24h=d.get("sold_24h") or 0,
         vendor_sell=_int(d.get("vendor_sell_copper")),

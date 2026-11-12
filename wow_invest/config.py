@@ -44,7 +44,11 @@ CRAFT_MAX_UNITS = 2000
 RISE_DAYS = 7  # forecast horizon
 RISE_GAIN = 0.15  # price rise a forecast pick bets on
 STATIC_PER_CYCLE = 60
-DETAIL_QUOTAS = {"flip": 100, "cross": 40, "vendor": 40, "hold": 30, "rise": 25, "trend": 30, "slow": 60}
+# vendors of a city's faction sell cheaper to players in good standing with it
+REP_CITIES = {"S": "Stormwind", "I": "Ironforge", "D": "Darnassus", "G": "Gnomeregan Exiles"}
+REP_DISCOUNT = {"Friendly": 0.05, "Honored": 0.10, "Revered": 0.15, "Exalted": 0.20}
+REP_DEFAULT = '{"S": "Revered"}'  # until the player sets their own standings
+DETAIL_QUOTAS = {"flip": 400, "cross": 40, "vendor": 40, "hold": 30, "rise": 25, "trend": 30, "slow": 60}
 MAX_ERRORS_IN_ROW = 3
 JUDGE_RUN = 3
 PROVEN_RECENT = 20

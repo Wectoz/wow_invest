@@ -18,6 +18,11 @@ document.querySelectorAll("select[data-auto]").forEach(function (list) {
 });
 // An item icon the image host cannot serve becomes an empty slot instead of a broken picture.
 document.querySelectorAll("img.ico").forEach(function (img) {
-  function blank() { var slot = document.createElement("div"); slot.className = img.className; img.replaceWith(slot); }
-  if (img.complete && !img.naturalWidth) blank(); else img.addEventListener("error", blank);
+  function blank() {
+    // the Forever icon host refuses some icons that the main one serves: try that once before giving up
+    if (img.src.indexOf("/forever-eu/") > 0) { img.src = img.src.replace("/forever-eu/", "/eu/"); return; }
+    var slot = document.createElement("div"); slot.className = img.className; img.replaceWith(slot);
+  }
+  img.addEventListener("error", blank);
+  if (img.complete && !img.naturalWidth) blank();
 });

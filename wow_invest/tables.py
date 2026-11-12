@@ -7,7 +7,10 @@ VENDOR_ITEMS: item id -> limited stock per restock, None = unlimited. Built from
 from pfQuest's Classic data; rebuild it with scripts/vendor_ids.py), with the hand-checked
 unlimited staples on top.
 """
+import math
 from pathlib import Path
+
+from .config import REP_DISCOUNT
 
 
 GATHER_BANDS = {
@@ -85,11 +88,27 @@ _UNLIMITED = {
 }
 
 
-_VENDORS = {int(i): (int(stock), who) for i, _, stock, who in (
+_VENDORS = {int(i): (int(stock), who, reps) for i, _, stock, who, reps in (
     line.split("\t") for line in (Path(__file__).parent / "vendor_items.txt").read_text(encoding="utf-8").splitlines())}
 # unknown stock (-1, a Forever-only item or vendor) is treated as one a restock: never assumed unlimited
-VENDOR_ITEMS = {**{i: None if stock == 0 else abs(stock) for i, (stock, _) in _VENDORS.items()}, **_UNLIMITED}
-VENDOR_WHERE = {i: who for i, (_, who) in _VENDORS.items()}  # one vendor to visit, a capital city if possible
+VENDOR_ITEMS = {**{i: None if stock == 0 else abs(stock) for i, (stock, _, _) in _VENDORS.items()}, **_UNLIMITED}
+VENDOR_WHERE = {i: who for i, (_, who, _) in _VENDORS.items()}  # one vendor to visit, a capital city if possible
+
+# item -> {city reputation: one of its vendors}; only these vendors give a reputation discount
+VENDOR_REP = {i: dict(x.split("=", 1) for x in reps.split("|") if x) for i, (_, _, reps) in _VENDORS.items()}
+
+
+def vendor_deal(item_id: int, rep: dict | None) -> tuple[float, str | None]:
+    """(discount, vendor to visit) for the player's city standings `rep`, e.g. {"S": "Revered"}:
+    the vendor whose city gives the most off, else the usual one at full price."""
+    deals = [(REP_DISCOUNT.get((rep or {}).get(city), 0), who) for city, who in VENDOR_REP.get(item_id, {}).items()]
+    off, who = max(deals, key=lambda d: d[0], default=(0, None))
+    return (off, who) if off else (0, VENDOR_WHERE.get(item_id))
+
+
+def vendor_unit(item_id: int, price: int, quantity: int, rep: dict | None = None) -> int:
+    """What one unit costs at the vendor, after the player's best reputation discount."""
+    return math.ceil(price / (quantity or 1) * (1 - vendor_deal(item_id, rep)[0]))
 
 
 def _recipes() -> list[tuple[int, str, int, int, tuple[tuple[int, int], ...]]]:
@@ -107,3 +126,13 @@ RECIPES = _recipes()
 PROFESSIONS = sorted({r[1] for r in RECIPES})
 # made on a days-long cooldown, so they cannot be crafted in bulk: Mooncloth, Refined Deeprock Salt
 CRAFT_SKIP = {14342, 15409}
+
+# item id -> (name, class name, required level or None), from the Questie addon database: the price
+# site has no name, icon or class for a few hundred items (rebuilt by scripts/vendor_ids.py)
+ITEM_INFO = {int(i): (name, cls or None, int(lvl) if lvl else None) for i, name, cls, lvl in (
+    line.split("\t") for line in (Path(__file__).parent / "item_names.txt").read_text(encoding="utf-8").splitlines())}
+
+# item id -> (icon URL, quality), from the game's own item tables, for the same items (rebuilt by
+# scripts/item_icons.py)
+ITEM_ICON = {int(i): (f"https://render.worldofwarcraft.com/forever-eu/icons/56/{icon}.jpg", q) for i, icon, q in (
+    line.split("\t") for line in (Path(__file__).parent / "item_icons.txt").read_text(encoding="utf-8").splitlines())}

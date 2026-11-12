@@ -33,7 +33,7 @@ def client(*items, times=None):
 
 
 def test_parse_row_keeps_nulls_and_rounds_prices():
-    r = parse_row({"id": 14551, "name": None, "icon": None, "quality": None, "class_name": None, "subclass_name": None,
+    r = parse_row({"id": 990001, "name": None, "icon": None, "quality": None, "class_name": None, "subclass_name": None,
                    "required_level": None, "item_level": None, "minimum_ask_copper": 1800000.0, "average_ask_copper": 1800000.4,
                    "units": 2, "listings": 2, "sold_24h": 6, "vendor_sell_copper": None})
     assert (r.name, r.min_ask, r.avg_ask, r.required_level) == (None, 1800000, 1800000, None)
@@ -146,3 +146,19 @@ def test_item_detail_bad_timestamp_is_api_error():
     c, _, _ = client({"item": {"id": 1}, "series": [{"captured_at": "garbage"}]})
     with pytest.raises(ApiError):
         c.item_detail("alliance", 1, 0.05)
+
+
+def test_row_the_site_has_no_data_for_gets_its_name_class_and_level_from_the_item_table():
+    from wow_invest.api import parse_row
+    r = parse_row({"id": 13046, "name": None, "class_name": None, "required_level": None, "units": 1})
+    assert (r.name, r.class_name, r.required_level) == ("Blanchard's Stout", "Weapon", 45)
+    r = parse_row({"id": 13046, "name": "Site Name", "class_name": "Armor", "required_level": 0})
+    assert (r.name, r.class_name, r.required_level) == ("Site Name", "Armor", 0)  # the site's own data wins
+
+
+def test_parse_row_fills_icon_and_quality_the_site_lacks():
+    r = parse_row({"id": 15216, "name": None, "icon": None, "quality": None, "minimum_ask_copper": 1.0})
+    assert (r.name, r.icon, r.quality) == (
+        "Rune Sword", "https://render.worldofwarcraft.com/forever-eu/icons/56/135351.jpg", "UNCOMMON")
+    r = parse_row({"id": 15216, "name": "x", "icon": "site-icon", "quality": "RARE", "minimum_ask_copper": 1.0})
+    assert (r.icon, r.quality) == ("site-icon", "RARE")  # the site's own values win

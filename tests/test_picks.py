@@ -241,3 +241,17 @@ def test_slow_seller_with_an_underpriced_piece_and_a_good_profit():
     assert quick_flip(row(), detail(series=slow, ladder=lad), held=3, now=NOW) is None  # already holding three days of sales
     cheap = pts([(h, 6, 3000, 0, 1 if h % 6 == 0 else 0) for h in range(48)])
     assert quick_flip(row(), detail(series=cheap, ladder=[(2000, 1), (3000, 1)]), held=0, now=NOW) is None  # 8s: not worth the wait
+
+
+def test_stormwind_vendor_price_has_the_reputation_discount():
+    from wow_invest.tables import vendor_deal, vendor_unit
+    assert vendor_unit(3466, 2000, 1, {"S": "Revered"}) == 1700  # Strong Flux: 20s less 15%
+    assert vendor_unit(3466, 2000, 1) == 2000 and vendor_unit(3466, 2000, 1, {"S": "Hated"}) == 2000
+    assert vendor_unit(1, 2000, 1, {"S": "Revered"}) == 2000  # no vendor of a city sells it: full price
+    assert vendor_unit(1, 10001, 5) == 2001
+    # the best standing wins, and names the vendor to visit
+    assert vendor_deal(3466, {"S": "Friendly", "I": "Exalted"}) == (0.20, "Golnir Bouldertoe, Ironforge")
+    assert vendor_deal(3466, {}) == (0, "Edna Mullby, Stormwind City")
+    d = detail(ladder=[(19900, 100)], purchase_price=5000)
+    p = vendor_flip(row(item_id=3466), d, held=0, now=NOW, rep={"S": "Revered"})
+    assert p.max_unit_price == 4250 and "Edna Mullby, Stormwind City (15% off for your reputation)" in p.reason

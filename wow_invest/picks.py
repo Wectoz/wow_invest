@@ -8,7 +8,7 @@ from .models import Pick
 from .pricing import (change, days_to_sell, deposit, going_price, history_hours, ladder_buy,
                       listed_units, max_units, net_proceeds, sales_per_day, sales_per_day_window,
                       score, sureness, undercut, window_median)
-from .tables import GATHER_BANDS, VENDOR_ITEMS, VENDOR_WHERE
+from .tables import GATHER_BANDS, VENDOR_ITEMS, vendor_deal, vendor_unit
 
 
 def _money(cu):
@@ -143,14 +143,15 @@ def cross_flip(row, buy, sell, held, now):
     return _flip("cross", row, buy, sell, held, now)
 
 
-def vendor_flip(row, d, held, now):
+def vendor_flip(row, d, held, now, rep=None):
     going = going_price(d.series, now)
     # items every vendor runs out of (a few per restock) are left out: not worth a trip
     if (VENDOR_ITEMS.get(row.item_id, 0) is not None or not d.purchase_price or going is None
             or not _trend_ok(d.series, now)):
         return None
-    unit = math.ceil(d.purchase_price / d.purchase_quantity)
-    who = f": {VENDOR_WHERE[row.item_id]}" if VENDOR_WHERE.get(row.item_id) else ""
+    unit = vendor_unit(row.item_id, d.purchase_price, d.purchase_quantity, rep)
+    off, who = vendor_deal(row.item_id, rep)
+    who = (f": {who}" if who else "") + (f" ({off:.0%} off for your reputation)" if off else "")
     text = (f"A vendor sells it for {_money(unit)}{who} and it goes for {_money(going)}"
             f" on {d.house.title()}")
     return _build("vendor", row, d, held, now, "vendor", lambda _: text, going=going, unit_cost=unit)

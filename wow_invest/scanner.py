@@ -11,7 +11,7 @@ from . import db, planner, tracker
 from .api import ApiError, Client
 from .crowd import estimate_crowd, item_band, overlaps
 from .picks import craft_flip, cross_flip, hold, quick_flip, rise, trend, vendor_flip
-from .tables import CRAFT_SKIP, RECIPES, VENDOR_ITEMS
+from .tables import CRAFT_SKIP, RECIPES, VENDOR_ITEMS, vendor_unit
 
 HOUSES = c.SCAN_HOUSES
 log = logging.getLogger(__name__)
@@ -39,12 +39,14 @@ def _choose(conn, rows, deal_ids, crowd, now):
         ask, units, _ = prev.get(r.item_id, (None, 0, 0))
         return bool(ask) and r.min_ask >= (1 + c.TREND_MIN) * ask and units > 0 and r.units < (1 + c.FLOOD_UNITS_RISE) * units
 
+    rep = _rep(conn)
+
     def vendor_margin(r):
         """Sales-weighted gap between the ask and the vendor price; None while the price is unknown."""
         s = db.static(conn, r.item_id)
         if s is None or s["static_done"] != 1:
             return None
-        return (r.min_ask - s["purchase_price"] / (s["purchase_quantity"] or 1)) * r.sold_24h
+        return (r.min_ask - vendor_unit(r.item_id, s["purchase_price"], s["purchase_quantity"], rep)) * r.sold_24h
 
     def vendor_list():
         sold = [(r, vendor_margin(r)) for i, r in a.items() if VENDOR_ITEMS.get(i, 0) is None]  # unlimited stock only
@@ -93,12 +95,17 @@ def _behind(r, crowd) -> bool:
     return band is not None and (band[0] + band[1]) / 2 < crowd[0]
 
 
+def _rep(conn) -> dict:
+    """The player's city standings, e.g. {"S": "Revered"}: they set the vendor discounts."""
+    return json.loads(db.get_setting(conn, "rep", c.REP_DEFAULT))
+
+
 def _vendor_unit(conn, item_id) -> int | None:
     """Vendor price of one unit, for items with unlimited vendor stock and a known price."""
     s = db.static(conn, item_id)
     if VENDOR_ITEMS.get(item_id, 0) is not None or s is None or s["static_done"] != 1 or not s["purchase_price"]:
         return None
-    return math.ceil(s["purchase_price"] / (s["purchase_quantity"] or 1))
+    return vendor_unit(item_id, s["purchase_price"], s["purchase_quantity"], _rep(conn))
 
 
 def _crafts(conn, a, cut, skills, chosen):
@@ -188,7 +195,7 @@ def run_cycle(client, conn, now, force=False) -> str:
             try:
                 new = [cross_flip(r, buy, sell, h, now)] if kind == "cross" else []
                 if house == "alliance":  # every builder that sells on Alliance: never hide a buy
-                    new += [quick_flip(r, sell, h, now), vendor_flip(r, sell, h, now),
+                    new += [quick_flip(r, sell, h, now), vendor_flip(r, sell, h, now, _rep(conn)),
                             hold(r, sell, crowd, h, now), rise(r, sell, _behind(r, crowd), h, now),
                             trend(r, sell, h, now)]
             except Exception:

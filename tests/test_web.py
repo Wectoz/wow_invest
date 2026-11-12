@@ -64,7 +64,7 @@ def test_render_escapes_error():
 
 
 def test_render_null_name_falls_back():
-    assert "Item 14551" in state_html(seed(":memory:", [mkpick(item_id=14551, name=None)]))
+    assert "Item 990001" in state_html(seed(":memory:", [mkpick(item_id=990001, name=None)]))
 
 
 def test_render_empty_state_says_gathering_history():
@@ -462,6 +462,15 @@ def test_page_says_how_many_picks_the_profit_limits_hide(server):
     assert "more picks are hidden" not in req(base + "/")[1]
     assert req(base + "/min-profit", {"min_profit": "50g"})[0] == 303
     assert "1 more picks are hidden by the two profit limits" in req(base + "/")[1]
+    assert "more picks are hidden" not in req(base + "/?tab=vendor")[1]  # counted per tab: both are flips
+
+
+def test_page_says_how_many_picks_the_type_filter_hides():
+    c = seed(":memory:", [mkpick(1, "a-flip"), mkpick(2, "a-sword", kind="slow")])
+    assert "hidden because" not in state_html(c)
+    db.set_setting(c, "type", "gear")  # neither item has a class, so both count as Other
+    assert "1 more picks are hidden because only Gear is shown" in state_html(c, tab="ah")
+    assert "2 more picks are hidden because only Gear is shown" in state_html(c)
 
 
 def test_slow_sellers_have_their_own_tab():
@@ -469,3 +478,16 @@ def test_slow_sellers_have_their_own_tab():
     slow, ah = state_html(c, tab="slow"), state_html(c, tab="ah")
     assert "a-sword" in slow and "a-flip" not in slow and "Slow sellers <span>1</span>" in slow
     assert "a-flip" in ah and "a-sword" not in ah
+
+
+def test_pick_saved_without_a_name_shows_the_item_table_name():
+    h = state_html(seed(":memory:", [mkpick(13046, "Item 13046")]))
+    assert "Blanchard&#x27;s Stout" in h and "Item 13046" not in h
+
+
+def test_city_reputations_are_saved_from_the_vendor_tab(server):
+    path, base, port = server
+    assert "My city reputations" in req(base + "/?tab=vendor")[1] and "My city reputations" not in req(base + "/")[1]
+    assert req(base + "/rep", {"S": "Exalted", "I": "", "D": "junk"})[0] == 303
+    assert db.get_setting(db.connect(path), "rep") == '{"S": "Exalted"}'
+    assert "<option selected>Exalted</option>" in req(base + "/?tab=vendor")[1]

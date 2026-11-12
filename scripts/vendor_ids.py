@@ -6,7 +6,8 @@ The second file gives vendor stock: db/items.lua from https://github.com/shagu/p
 data, `["V"] = { [npc] = stock }` with 0 for unlimited). An item is limited when every Alliance
 vendor known there has a stock number. Items none of whose vendors pfQuest knows are marked unknown.
 
-Writes tab-separated `item_id, vendor_count, stock per restock (0 = unlimited, -1 = unknown), one vendor and its zone` for every item that an Alliance-friendly (or neutral) vendor sells. QuestieDB stores each
+Writes tab-separated `item_id, vendor_count, stock per restock (0 = unlimited, -1 = unknown), one vendor and its zone,
+one vendor per city reputation as S=..|I=..|D=..|G=..` (those give a reputation discount) for every item that an Alliance-friendly (or neutral) vendor sells. QuestieDB stores each
 field as base64 CBOR in its .toc: `## X-Item-<id>-14` is the vendor NPC list, `## X-Npc-<id>-S` the
 small fields, where field 13 is the faction ("A", "H" or "AH").
 """
@@ -17,7 +18,10 @@ import sys
 from pathlib import Path
 
 OUT = Path(__file__).parent.parent / "wow_invest" / "vendor_items.txt"
-VENDORS, FACTION, NAME, ZONE = 14, 13, 1, 9
+NAMES = OUT.with_name("item_names.txt")
+VENDORS, FACTION, NAME, ZONE, TEMPLATE = 14, 13, 1, 9, 12
+# NPC faction template -> the city reputation that sets its prices: Stormwind, Ironforge, Darnassus, Gnomeregan
+REPS = {11: "S", 12: "S", 123: "S", 55: "I", 57: "I", 79: "D", 80: "D", 23: "G", 64: "G", 875: "G"}
 ZONES = "Interface/AddOns/Questie/Localization/lookups/lookupZones.lua"
 CAPITALS = ["Stormwind City", "Ironforge", "Darnassus"]
 
@@ -100,17 +104,31 @@ def main(wow_dir: str, pfquest_items: str) -> int:
         return -1 if not known else 0 if 0 in known else max(known)
 
     def where(item, sellers):
-        """One vendor to send the player to: one that never runs out, in a capital city if any."""
+        """One vendor to send the player to: one that never runs out, in a capital city if any.
+        Then the same choice among the vendors of each city reputation."""
         if limit(item, sellers) == 0:
             sellers = [n for n in sellers if stock.get(item, {}).get(n, 0) == 0]
         zone = lambda n: zones.get(str(get(npcs[n], ZONE)), "")
-        n = min(sellers, key=lambda n: (CAPITALS.index(zone(n)) if zone(n) in CAPITALS else len(CAPITALS), n))
-        return f"{get(npcs[n], NAME)}, {zone(n)}".rstrip(", ")
+
+        def best(ns):
+            n = min(ns, key=lambda n: (CAPITALS.index(zone(n)) if zone(n) in CAPITALS else len(CAPITALS), n))
+            return f"{get(npcs[n], NAME)}, {zone(n)}".rstrip(", ")
+        by_rep = {r: [n for n in sellers if REPS.get(get(npcs[n], TEMPLATE)) == r] for r in "SIDG"}
+        return best(sellers) + "\t" + "|".join(f"{r}={best(ns)}" for r, ns in by_rep.items() if ns)
 
     ids = {i: sorted(alliance & set(sold_by)) for i, sold_by in fields(toc, "Item", str(VENDORS)).items()}
     ids = {i: v for i, v in sorted(ids.items()) if v}
     assert 2320 in ids and 2589 not in ids, "Coarse Thread is vendor-sold, Linen Cloth is not"
+    assert "S=Edna Mullby, Stormwind City" in where(3466, ids[3466]), "Strong Flux is sold in Stormwind"
     OUT.write_text("".join(f"{i}\t{len(v)}\t{limit(i, v)}\t{where(i, v)}\n" for i, v in ids.items()), encoding="utf-8")
+    # names, classes and levels for the items the price site has no data for
+    classes = {0: "Consumable", 1: "Container", 2: "Weapon", 4: "Armor", 5: "Reagent", 6: "Projectile",
+               7: "Trade Goods", 9: "Recipe", 11: "Quiver", 12: "Quest", 13: "Key", 15: "Miscellaneous"}
+    info = {i: (get(v, NAME), classes.get(get(v, 12), ""), get(v, 10) or "")
+            for i, v in sorted(fields(toc, "Item", "S").items()) if get(v, NAME)}
+    assert info[13046][:2] == ("Blanchard's Stout", "Weapon")
+    NAMES.write_text("".join(f"{i}\t{n}\t{c}\t{lvl}\n" for i, (n, c, lvl) in info.items()), encoding="utf-8")
+    print(f"{len(info)} item names -> {NAMES}")
     print(f"{len(ids)} vendor items ({sum(1 for i, v in ids.items() if limit(i, v) > 0)} limited, {sum(1 for i, v in ids.items() if limit(i, v) < 0)} unknown) -> {OUT}")
     return 0
 
