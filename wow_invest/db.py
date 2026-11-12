@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from statistics import median
 from dataclasses import asdict, fields
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,6 +36,8 @@ def connect(path: str) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     if "sell_at" not in {r[1] for r in conn.execute("PRAGMA table_info(holdings)")}:
         conn.execute("ALTER TABLE holdings ADD COLUMN sell_at TEXT NOT NULL DEFAULT 'alliance'")
+    if "sold_price" not in {r[1] for r in conn.execute("PRAGMA table_info(holdings)")}:
+        conn.execute("ALTER TABLE holdings ADD COLUMN sold_price INTEGER")  # per unit, as the user reports it
     return conn
 
 
@@ -97,6 +100,34 @@ def rows_at(conn, house, hours_ago: float, now) -> dict[int, tuple[int | None, i
         "SELECT item_id, min_ask, units, sold_24h FROM snapshots WHERE scan_id=?", (s["id"],))}
 
 
+def crowd_drift(conn, now) -> float | None:
+    """Levels a day the sales-weighted mean equipment level climbed over our scans of the last week.
+    None with less than a day of scans."""
+    scans = conn.execute("SELECT id, captured_at FROM scans WHERE house='alliance' AND captured_at >= ? "
+                         "ORDER BY captured_at", (_iso(now - timedelta(days=7)),)).fetchall()
+    if len(scans) < 2:
+        return None
+    days = (_dt(scans[-1]["captured_at"]) - _dt(scans[0]["captured_at"])).total_seconds() / 86400
+    mean = [conn.execute(
+        """SELECT sum(s.sold_24h * i.required_level) * 1.0 / sum(s.sold_24h) FROM snapshots s
+           JOIN items i USING(item_id) WHERE s.scan_id = ? AND i.class_name IN ('Armor', 'Weapon')
+           AND i.required_level > 0""", (sid,)).fetchone()[0] for sid in (scans[0]["id"], scans[-1]["id"])]
+    if days < 1 or None in mean:
+        return None
+    return (mean[1] - mean[0]) / days
+
+
+def recent_medians(conn, house, now, hours=24) -> dict[int, float]:
+    """Median cheapest ask per item over our scans of the last `hours`, for items seen at least twice."""
+    asks: dict[int, list[int]] = {}
+    for i, a in conn.execute(
+            "SELECT s.item_id, s.min_ask FROM snapshots s JOIN scans c ON c.id = s.scan_id "
+            "WHERE c.house = ? AND c.captured_at >= ? AND s.min_ask IS NOT NULL",
+            (house, _iso(now - timedelta(hours=hours)))):
+        asks.setdefault(i, []).append(a)
+    return {i: median(v) for i, v in asks.items() if len(v) >= 2}
+
+
 def missing_static(conn, limit: int) -> list[int]:
     return [r[0] for r in conn.execute(
         """SELECT i.item_id FROM items i
@@ -153,9 +184,17 @@ def add_holding(conn, item_id, kind, qty, price_paid, target, now, sell_by, sell
             (item_id, kind, qty, price_paid, target, _iso(now), _iso(sell_by), sell_at)).lastrowid
 
 
-def mark_sold(conn, holding_id, now):
+def mark_sold(conn, holding_id, now, price: int | None = None):
     with conn:
-        conn.execute("UPDATE holdings SET sold_at=? WHERE id=?", (_iso(now), holding_id))
+        conn.execute("UPDATE holdings SET sold_at=?, sold_price=? WHERE id=?", (_iso(now), price, holding_id))
+
+
+def real_results(conn, cut: float) -> dict[str, tuple[int, int]]:
+    """{kind: (sales, profit)} over holdings sold with a reported price: what came back after the AH
+    cut, minus what was paid. Listing deposits are not known, so they are not subtracted."""
+    return {r[0]: (r[1], int(r[2])) for r in conn.execute(
+        "SELECT kind, count(*), sum(sold_price * qty * (1 - ?) - price_paid) FROM holdings "
+        "WHERE sold_at IS NOT NULL AND sold_price IS NOT NULL GROUP BY kind", (cut,))}
 
 
 def open_holdings(conn) -> list[Holding]:
@@ -216,13 +255,15 @@ def judge_pick(conn, pick_id, hit: bool, now):
 
 def hit_stats(conn) -> dict:
     j, h = conn.execute("SELECT count(*), coalesce(sum(hit),0) FROM picks "
-                        "WHERE judged_at IS NOT NULL").fetchone()
+                        "WHERE kind NOT IN ('rise', 'trend') AND judged_at IS NOT NULL").fetchone()
     hold = conn.execute(
         """SELECT count(*), coalesce(sum(hit),0), count(DISTINCT item_id),
                   count(DISTINCT substr(created_at,1,10)) FROM (
              SELECT * FROM picks WHERE kind='hold' AND judged_at IS NOT NULL
              ORDER BY judged_at DESC, id DESC LIMIT ?)""", (PROVEN_RECENT,)).fetchone()
-    return {"judged": j, "hits": h, "hold_judged": hold[0], "hold_hits": hold[1],
+    rj, rh = conn.execute("SELECT count(*), coalesce(sum(hit),0) FROM picks "
+                          "WHERE kind IN ('rise', 'trend') AND judged_at IS NOT NULL").fetchone()
+    return {"judged": j, "hits": h, "rise_judged": rj, "rise_hits": rh, "hold_judged": hold[0], "hold_hits": hold[1],
             "hold_items": hold[2], "hold_days": hold[3]}
 
 

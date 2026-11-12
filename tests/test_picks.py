@@ -5,7 +5,7 @@ import pytest
 from tests.conftest import NOW, pts, steady
 from wow_invest import config
 from wow_invest.models import Detail, Row
-from wow_invest.picks import cross_flip, hold, quick_flip, vendor_flip
+from wow_invest.picks import craft_flip, craft_ladder, cross_flip, hold, quick_flip, rise, vendor_flip
 from wow_invest.planner import plan
 from wow_invest.tables import VENDOR_ITEMS
 
@@ -152,14 +152,12 @@ def test_vendor_flip_only_for_items_a_vendor_sells(monkeypatch):
     assert (p.kind, p.buy_at, p.sell_at, p.qty, p.cost, p.max_unit_price, p.sell_price, p.profit) == \
         ("vendor", "vendor", "alliance", 60, 300000, 5000, 19899, 829743)
     assert p.sell_by == NOW + timedelta(days=3)  # days 2.5
-    assert "limited" not in p.reason
     assert vendor_flip(row(), detail(purchase_price=0), held=0, now=NOW) is None
     # sold in stacks of 5 for 10001 → ceil(2000.2) = 2001 a unit
     p = vendor_flip(row(), detail(purchase_price=10001, purchase_quantity=5), held=0, now=NOW)
     assert (p.max_unit_price, p.cost) == (2001, 2001 * 60)
-    monkeypatch.setitem(VENDOR_ITEMS, 1, 7)  # limited stock caps the quantity
-    p = vendor_flip(row(), d, held=0, now=NOW)
-    assert p.qty == 7 and "limited" in p.reason
+    monkeypatch.setitem(VENDOR_ITEMS, 1, 1)  # limited stock: never a vendor flip
+    assert vendor_flip(row(), d, held=0, now=NOW) is None
 
 
 def test_hold_targets_half_recovery_and_three_day_sell_by():
@@ -180,3 +178,54 @@ def test_hold_none_for_endgame_band():
 def test_hold_none_when_sales_fall_with_price():
     s = pts([(h, 1500, 60, 0, 2) for h in range(24)] + [(h, 1000, 100, 0, 4) for h in range(24, 48)])
     assert hold(row(item_id=785), detail(series=s, ladder=[(60, 500)]), crowd=(20, 30), held=0, now=NOW) is None
+
+
+def test_rise_bets_on_an_item_the_crowd_left_once_supply_shrinks_and_the_price_holds():
+    # listed 1500 a day ago, 1000 now; price steady at 20000
+    drying = pts([(h, 1000, 20000, 0, 4) for h in range(24)] + [(h, 1500, 20000, 0, 4) for h in range(24, 48)])
+    lad = [(19000, 10), (20000, 10), (21000, 50)]
+    p = rise(row(item_id=785), detail(series=drying, ladder=lad), True, held=0, now=NOW)
+    # buys up to the going price (20000), aims 15% above it, waits a week
+    assert (p.kind, p.qty, p.cost, p.sell_price) == ("rise", 20, 390000, 23000)
+    assert p.sell_by == NOW + timedelta(days=7) and "33% fewer are listed" in p.reason
+    assert rise(row(), detail(series=drying, ladder=lad), False, held=0, now=NOW) is None  # the crowd is still there
+    assert rise(row(), detail(series=flood, ladder=[(50, 10)]), True, held=0, now=NOW) is None  # still falling
+    growing = pts([(h, 1500, 20000, 0, 4) for h in range(24)] + [(h, 1000, 20000, 0, 4) for h in range(24, 48)])
+    assert rise(row(), detail(series=growing, ladder=lad), True, held=0, now=NOW) is None  # supply still building
+
+
+def test_craft_ladder_prices_each_crafted_unit_from_the_reagent_ladders():
+    cloth, thread = [(100, 3), (200, 10)], [(10, 10**9)]  # AH ladder, vendor at a flat 10
+    # 2 cloth + 1 thread a craft: 210, then 100+200+10, then 410..., until the cloth runs out after 6 crafts
+    assert craft_ladder([(2, cloth), (1, thread)], 1, 100) == [(210, 1), (310, 1)] + [(410, 1)] * 4
+    assert craft_ladder([(2, cloth), (1, thread)], 1, 2) == [(210, 1), (310, 1)]
+    assert craft_ladder([(1, [(100, 5)])], 200, 1000) == [(1, 200)] * 5  # 200 arrows a craft, rounded up
+    assert cloth == [(100, 3), (200, 10)]  # the caller's ladders are not consumed
+
+
+def test_craft_flip_buys_reagents_while_each_piece_still_pays():
+    recipe = (1, "Tailoring", 125, 1, ((7, 2), (8, 1)))
+    mats = [("Bolt", 2, [(4000, 6), (9000, 100)], False), ("Thread", 1, [(500, 10**9)], True)]
+    p = craft_flip(row(), detail(ladder=[(19900, 100)]), recipe, mats, held=0, now=NOW)
+    # going 20000, limit 16000 a piece: 3 crafts at 8500, the 4th would need 9000-a-bolt cloth (18500)
+    assert (p.kind, p.buy_at, p.qty, p.cost, p.max_unit_price, p.sell_price) == ("craft", "craft", 3, 25500, 8500, 19899)
+    assert p.reason.startswith("Craft 3× with Tailoring (skill 125): 6× Bolt (AH), 3× Thread (vendor). Materials up to 85s")
+    assert "≈48 sold/day (estimate)" in p.reason
+    dear = [("Bolt", 2, [(9000, 100)], False)]
+    assert craft_flip(row(), detail(ladder=[(19900, 100)]), recipe, dear, held=0, now=NOW) is None
+
+
+def test_underpriced_lot_is_a_flip_even_while_the_price_falls():
+    # yesterday 200, today 100: a falling price, so the ordinary flip refuses it
+    falling = pts([(h, 300, 100, 0, 40) for h in range(24)] + [(h, 300, 200, 0, 40) for h in range(24, 48)])
+    lot = [(60, 30), (100, 500), (101, 500)]  # 30 units 40% under the next listing
+    p = quick_flip(row(), detail(series=falling, ladder=lot), held=0, now=NOW)
+    assert (p.kind, p.qty, p.cost, p.sell_price) == ("flip", 30, 1800, 99)
+    assert p.reason.startswith("Underpriced: listed at up to 60c, 40% under the next price of 1s")
+    # no gap of a fifth anywhere near the bottom: nothing
+    assert quick_flip(row(), detail(series=falling, ladder=[(95, 30), (100, 500)]), held=0, now=NOW) is None
+    # the cheap lot is bigger than what resells in six hours (480 a day × 0.5 × 0.25 = 60)
+    assert quick_flip(row(), detail(series=falling, ladder=[(60, 61), (100, 500)]), held=0, now=NOW) is None
+    # a thin wall far above the usual price: it sells at the usual price, not the wall
+    p = quick_flip(row(), detail(series=falling, ladder=[(60, 30), (500, 2)]), held=0, now=NOW)
+    assert p.sell_price == 99

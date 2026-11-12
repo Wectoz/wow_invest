@@ -1,8 +1,12 @@
 """Rebuild wow_invest/vendor_items.txt from the Questie database addon in a WoW Forever folder.
 
-    python scripts/vendor_ids.py "C:/Program Files (x86)/World of Warcraft/_forever_"
+    python scripts/vendor_ids.py "C:/Program Files (x86)/World of Warcraft/_forever_" pfquest/db/items.lua
 
-Writes `item_id vendor_count` for every item that an Alliance-friendly (or neutral) vendor sells. QuestieDB stores each
+The second file gives vendor stock: db/items.lua from https://github.com/shagu/pfQuest (Classic 1.12
+data, `["V"] = { [npc] = stock }` with 0 for unlimited). An item is limited when every Alliance
+vendor known there has a stock number. Items none of whose vendors pfQuest knows are marked unknown.
+
+Writes tab-separated `item_id, vendor_count, stock per restock (0 = unlimited, -1 = unknown), one vendor and its zone` for every item that an Alliance-friendly (or neutral) vendor sells. QuestieDB stores each
 field as base64 CBOR in its .toc: `## X-Item-<id>-14` is the vendor NPC list, `## X-Npc-<id>-S` the
 small fields, where field 13 is the faction ("A", "H" or "AH").
 """
@@ -13,7 +17,9 @@ import sys
 from pathlib import Path
 
 OUT = Path(__file__).parent.parent / "wow_invest" / "vendor_items.txt"
-VENDORS, FACTION = 14, 13
+VENDORS, FACTION, NAME, ZONE = 14, 13, 1, 9
+ZONES = "Interface/AddOns/Questie/Localization/lookups/lookupZones.lua"
+CAPITALS = ["Stormwind City", "Ironforge", "Darnassus"]
 
 
 def cbor(b, i=0):
@@ -59,19 +65,53 @@ def fields(toc: str, entity: str, field: str) -> dict[int, object]:
     return {i: cbor(base64.b64decode(s))[0] for i, s in raw.items()}
 
 
-def main(wow_dir: str) -> int:
-    toc = (Path(wow_dir) / "Interface/AddOns/QuestieDB/QuestieDB_Forever.toc").read_text(encoding="utf-8")
-    def faction(small):  # a {field: value} map, or a positional list starting at field 1
-        if isinstance(small, dict):
-            return small.get(FACTION) or ""
-        return (small[FACTION - 1] if len(small) >= FACTION else None) or ""
+def vendor_stock(path: str) -> dict[int, dict[int, int]]:
+    """{item: {npc: stock}} from pfQuest's items.lua, where 0 means the vendor never runs out."""
+    out, item, in_v = {}, None, False
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if m := re.fullmatch(r"  \[(\d+)\] = \{\}?,?", line):
+            item, in_v = int(m[1]), False
+        elif line.startswith('    ["'):
+            in_v = line.startswith('    ["V"]')
+        elif in_v and (m := re.fullmatch(r"      \[(\d+)\] = (\d+),", line)):
+            out.setdefault(item, {})[int(m[1])] = int(m[2])
+    return out
 
-    alliance = {i for i, small in fields(toc, "Npc", "S").items() if "A" in faction(small)}
-    ids = {i: len(alliance & set(npcs)) for i, npcs in fields(toc, "Item", str(VENDORS)).items()}
-    ids = {i: n for i, n in sorted(ids.items()) if n}
+
+def main(wow_dir: str, pfquest_items: str) -> int:
+    toc = (Path(wow_dir) / "Interface/AddOns/QuestieDB/QuestieDB_Forever.toc").read_text(encoding="utf-8")
+    zones = dict(re.findall(r'\[(\d+)\]="([^"]+)"', (Path(wow_dir) / ZONES).read_text(encoding="utf-8")))
+
+    def get(small, field):  # a {field: value} map, or a positional list starting at field 1
+        if isinstance(small, dict):
+            return small.get(field)
+        return small[field - 1] if len(small) >= field else None
+
+    npcs = fields(toc, "Npc", "S")
+    alliance = {i for i, small in npcs.items() if "A" in (get(small, FACTION) or "")}
+
+    stock = vendor_stock(pfquest_items)
+    assert stock[2320][66] == 0 and stock[8846], "Coarse Thread is unlimited; Gromsblood has a stock number"
+
+    def limit(item, sellers):
+        """0 when some vendor never runs out, -1 when pfQuest knows none of its vendors (a Forever-only
+        item or vendor), else the largest stock on offer."""
+        known = [stock[item][n] for n in sellers if n in stock.get(item, {})]
+        return -1 if not known else 0 if 0 in known else max(known)
+
+    def where(item, sellers):
+        """One vendor to send the player to: one that never runs out, in a capital city if any."""
+        if limit(item, sellers) == 0:
+            sellers = [n for n in sellers if stock.get(item, {}).get(n, 0) == 0]
+        zone = lambda n: zones.get(str(get(npcs[n], ZONE)), "")
+        n = min(sellers, key=lambda n: (CAPITALS.index(zone(n)) if zone(n) in CAPITALS else len(CAPITALS), n))
+        return f"{get(npcs[n], NAME)}, {zone(n)}".rstrip(", ")
+
+    ids = {i: sorted(alliance & set(sold_by)) for i, sold_by in fields(toc, "Item", str(VENDORS)).items()}
+    ids = {i: v for i, v in sorted(ids.items()) if v}
     assert 2320 in ids and 2589 not in ids, "Coarse Thread is vendor-sold, Linen Cloth is not"
-    OUT.write_text("".join(f"{i} {n}\n" for i, n in ids.items()))
-    print(f"{len(ids)} vendor items -> {OUT}")
+    OUT.write_text("".join(f"{i}\t{len(v)}\t{limit(i, v)}\t{where(i, v)}\n" for i, v in ids.items()), encoding="utf-8")
+    print(f"{len(ids)} vendor items ({sum(1 for i, v in ids.items() if limit(i, v) > 0)} limited, {sum(1 for i, v in ids.items() if limit(i, v) < 0)} unknown) -> {OUT}")
     return 0
 
 

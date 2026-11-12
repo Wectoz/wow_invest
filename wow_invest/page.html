@@ -1,14 +1,16 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta http-equiv="refresh" content="$reload_s;url=/">
+<noscript><meta http-equiv="refresh" content="$reload_s;url=$here"></noscript>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WoW Invest</title>
 <link rel="icon" href="/favicon.ico">
 <link rel="stylesheet" href="$css_href">
-</head><body><main>
+</head><body><main data-v="$version">
 $banners
 <div class="frame">
-  <div class="top"><h1>wow_invest</h1><div class="sub">$sub</div>
+  <header class="brand"><span class="orn"></span><img src="/static/icon.svg" alt="" width="72" height="72">
+    <div><h1>WoW Invest</h1><p>Auction House Planner</p></div><span class="orn"></span></header>
+  <div class="top"><div class="sub">$sub</div>
     <form method="post" action="/refresh"><button$refresh_off>Refresh picks</button></form></div>
   <div class="stats">
     <div class="stat"><div class="k">Your gold</div><div class="v">
@@ -21,7 +23,8 @@ $banners
   </div>
   <div class="sub">Counts picks whose price held at the target for 3 scans; it does not prove they sold.</div>
 </div>
-<div class="frame"><div class="sect">Buy in this order</div>$buy</div>
-<div class="frame"><div class="sect">Sell now</div>$sell</div>
-<div class="frame"><div class="sect">On paper (not proven yet, do not spend real gold)</div><div class="sub">Holds, price held at target: $paper_rate</div>$paper</div>
-</main></body></html>
+<div class="frame"><div class="sect">Buy in this order</div>$tabs$buy</div>
+<div class="frame"><div class="sect">Sell now</div><div class="sub">$real</div>$sell</div>
+</main>
+<script src="/static/app.js"></script>
+</body></html>

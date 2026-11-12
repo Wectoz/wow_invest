@@ -3,12 +3,12 @@
 GATHER_BANDS: level range of the zones where players gather or loot the item. Covers herbs and
 ores; cloth and leather are also included (controller ruling), as they are farmed the same way.
 VENDOR_ITEMS: item id -> limited stock per restock, None = unlimited. Built from vendor_items.txt
-(every item an Alliance-friendly vendor sells, from the Questie addon database; rebuild it with
-scripts/vendor_ids.py), with the hand-checked unlimited staples on top.
+(every item an Alliance-friendly vendor sells, from the Questie addon database, with vendor stock
+from pfQuest's Classic data; rebuild it with scripts/vendor_ids.py), with the hand-checked
+unlimited staples on top.
 """
 from pathlib import Path
 
-from .config import VENDOR_COMMON
 
 GATHER_BANDS = {
     2447: (1, 15),  # Peacebloom
@@ -85,11 +85,25 @@ _UNLIMITED = {
 }
 
 
-def _vendor_items() -> dict[int, int | None]:
-    # shortcut: Questie has no stock numbers, so an item only a few vendors sell counts as one per
-    # restock (herbs, recipes); replace with real stock data if a source turns up
-    lines = (Path(__file__).parent / "vendor_items.txt").read_text().splitlines()
-    return {int(i): None if int(n) >= VENDOR_COMMON else 1 for i, n in map(str.split, lines)}
+_VENDORS = {int(i): (int(stock), who) for i, _, stock, who in (
+    line.split("\t") for line in (Path(__file__).parent / "vendor_items.txt").read_text(encoding="utf-8").splitlines())}
+# unknown stock (-1, a Forever-only item or vendor) is treated as one a restock: never assumed unlimited
+VENDOR_ITEMS = {**{i: None if stock == 0 else abs(stock) for i, (stock, _) in _VENDORS.items()}, **_UNLIMITED}
+VENDOR_WHERE = {i: who for i, (_, who) in _VENDORS.items()}  # one vendor to visit, a capital city if possible
 
 
-VENDOR_ITEMS = {**_vendor_items(), **_UNLIMITED}
+def _recipes() -> list[tuple[int, str, int, int, tuple[tuple[int, int], ...]]]:
+    """(item made, profession, skill needed, units per craft, ((reagent, count), ...)), from the
+    AtlasLoot addon data; rebuild recipes.txt with scripts/recipes.py."""
+    out = []
+    for line in (Path(__file__).parent / "recipes.txt").read_text().splitlines():
+        item, prof, skill, made, mats = line.split()
+        out.append((int(item), prof.replace("_", " "), int(skill), int(made),
+                    tuple(tuple(map(int, m.split(":"))) for m in mats.split(","))))
+    return out
+
+
+RECIPES = _recipes()
+PROFESSIONS = sorted({r[1] for r in RECIPES})
+# made on a days-long cooldown, so they cannot be crafted in bulk: Mooncloth, Refined Deeprock Salt
+CRAFT_SKIP = {14342, 15409}

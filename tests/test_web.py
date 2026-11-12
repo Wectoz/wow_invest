@@ -30,8 +30,8 @@ def seed(path, picks=(), captured=NOW, gold=800 * 10000):
     return c
 
 
-def state_html(c, error=None, now=NOW):
-    return render_page(build_state(c, now), error)
+def state_html(c, error=None, now=NOW, tab="all"):
+    return render_page(build_state(c, now), error, tab=tab)
 
 
 def test_fmt_money():
@@ -167,7 +167,7 @@ def test_blackwater_holding_uses_blackwater_price_and_cut():
 
 def test_bought_form_visible_on_ranked_and_paper_not_inside_why():
     c = seed(":memory:", [mkpick(1), mkpick(2, kind="hold")])
-    h = state_html(c)
+    h = state_html(c) + state_html(c, tab="invest")  # the buy list, then the multi-day bets
     assert h.count('action="/bought"') == 2 and h.count("I bought this") == 4  # summary + button each
     why = h[h.index("<summary>Why</summary>"):]
     assert 'action="/bought"' not in why[:why.index("</details>")]
@@ -176,20 +176,21 @@ def test_bought_form_visible_on_ranked_and_paper_not_inside_why():
 
 def test_paper_rows_not_marked_unfunded_but_ranked_are():
     paper = mkpick(2, kind="hold", funded=False)
-    h = state_html(seed(":memory:", [paper]))
+    h = state_html(seed(":memory:", [paper]), tab="invest")
+    assert "Linen Cloth" in h and "Investments <span>1</span>" in h
     assert "unfunded" not in h.replace(".unfunded", "") and "not enough gold" not in h.replace(
         "do not spend real gold", "")
 
 
 def test_hit_rate_is_labelled_price_held_at_target():
     c = seed(":memory:")
-    h = state_html(c)
-    assert "Holds, price held at target: none judged yet" in h and "hit rate" not in h.lower()
+    h = state_html(c, tab="invest")
+    assert "holds: none judged yet · forecasts and rising: none judged yet" in h and "hit rate" not in h.lower()
     st = build_state(c, NOW)
     st["stats"] = {**st["stats"], "judged": 8, "hits": 6, "hold_judged": 10, "hold_hits": 7}
-    h = render_page(st)
+    h = render_page(st, tab="invest")
     assert '<div class="k">Price held at target</div><div class="v">6 of 8 (75%)</div>' in h
-    assert "Holds, price held at target: 7 of 10 (70%)" in h
+    assert "holds: 7 of 10 (70%)" in h
     assert h.count("Counts picks whose price held at the target for 3 scans; it does not prove they sold.") == 1
 
 
@@ -205,7 +206,7 @@ def test_labels_header_trend_depth():
 
 def test_html_security_headers_and_refresh():
     c = seed(":memory:")
-    assert 'content="300;url=/"' in state_html(c)
+    assert 'content="300;url=/?tab=all"' in state_html(c)
 
 
 @pytest.fixture
@@ -288,10 +289,16 @@ def test_refresh_starts_a_forced_scan_and_the_page_says_so(server, monkeypatch):
     monkeypatch.setattr(web.scanner, "refresh", lambda p: (seen.append(p), done.set()))
     assert req(base + "/refresh", {})[0] == 303
     assert done.wait(5) and seen == [path]
-    assert "Scanning the auction houses" not in req(base + "/")[1] and "Refresh picks" in req(base + "/")[1]
+    assert "Scanning the auction house" not in req(base + "/")[1] and "Refresh picks" in req(base + "/")[1]
     with web.scanner.busy:
         html = req(base + "/")[1]
-    assert "Scanning the auction houses" in html and 'content="15;url=/"' in html
+    assert "Scanning the auction house" in html and 'content="5;url=/?tab=all"' in html
+
+
+def test_loading_bar_resumes_where_the_scan_is():
+    st = {**build_state(db.connect(":memory:"), NOW), "scanning": True, "scan_secs": 200, "scan_for": 50.0}
+    assert '<div class="bar"><i style="--from:25%;--left:150s">' in render_page(st)
+    assert "--from:97%;--left:1s" in render_page({**st, "scan_for": 999.0})  # overrunning: parked near the end
 
 
 def raw(port, request: bytes):
@@ -338,3 +345,120 @@ def test_app_icon_served_and_linked(server):
         assert r.read()[:4] == b"\x00\x00\x01\x00"  # ICO header
     code, body = req(base + "/")
     assert code == 200 and '<link rel="icon" href="/favicon.ico">' in body and "<title>WoW Invest</title>" in body
+
+
+def test_tabs_filter_the_buy_list_and_survive_reloads_and_posts(server):
+    path, base, port = server
+    c = db.connect(path)
+    kinds = {"flip": 1, "vendor": 2, "craft": 3}
+    db.save_candidates(c, [mkpick(i, f"item-{k}", kind=k) for k, i in kinds.items()], NOW.isoformat())
+    html = req(base + "/?tab=craft")[1]
+    assert "item-craft" in html and "item-flip" not in html and "item-vendor" not in html
+    assert 'class="tab on" href="/?tab=craft">Crafting <span>1</span>' in html and 'url=/?tab=craft"' in html
+    assert "My profession skills" in html and "My profession skills" not in req(base + "/?tab=ah")[1]
+    assert "item-flip" in req(base + "/?tab=ah")[1] and "item-vendor" in req(base + "/?tab=vendor")[1]
+    assert all(f"item-{k}" in req(base + "/?tab=nonsense")[1] for k in kinds)  # unknown tab: everything
+    # a post made from a tab comes back to it
+    r = urllib.request.Request(base + "/skills", data=b"Tailoring=125&Cooking=", headers={"Referer": base + "/?tab=craft"})
+    try:
+        urllib.request.build_opener(_NoRedirect).open(r)
+    except urllib.error.HTTPError as e:
+        assert e.code == 303 and e.headers["Location"] == "/?tab=craft"
+    assert db.get_setting(c, "skills") == '{"Tailoring": 125}'
+    assert req(base + "/skills", {"Tailoring": "999"})[0] == 400
+
+
+def test_sold_price_feeds_real_results_and_an_undercut_is_flagged(server):
+    path, base, port = server
+    c = db.connect(path)
+    db.save_scan(c, "alliance", NOW.isoformat(), NOW.isoformat(), 0.05,
+                 [Row(7, "Wool", None, None, None, None, None, None, 9000, None, 10, 1, 5, None)])
+    hid = db.add_holding(c, 7, "vendor", 10, 50000, 12000, NOW, None)
+    html = req(base + "/")[1]
+    assert "No sales reported yet" in html and 'class="tag undercut"' in html  # 90s on the AH, aimed for 1g 20s
+    assert 'name="price" value="89s 99c"' in html  # prefilled with the advised price
+    assert req(base + "/sold", {"holding_id": str(hid), "price": "1g"})[0] == 303
+    assert db.real_results(c, 0.05) == {"vendor": (1, 45000)}  # 10 × 1g × 0.95 − 5g paid
+    assert "Real profit so far" in (html := req(base + "/")[1]) and "Vendor flip +" in html
+    other = db.add_holding(c, 7, "flip", 1, 100, 200, NOW, None)
+    assert req(base + "/sold", {"holding_id": str(other), "price": ""})[0] == 303  # no price: sold, not counted
+    assert db.real_results(c, 0.05) == {"vendor": (1, 45000)} and db.open_holdings(c) == []
+
+
+def test_controls_hide_sort_and_minimum_profit(server):
+    path, base, port = server
+    c = db.connect(path)
+    db.set_gold(c, 10**9)
+    db.save_candidates(c, [replace(mkpick(1, "cheap-fast"), profit=40000, score=9.0, days=0.2),
+                           replace(mkpick(2, "big-slow"), profit=900000, score=1.0, days=2.0)], NOW.isoformat())
+    order = lambda: [n for _, n in sorted((h.index(n), n) for h in [req(base + "/")[1]] for n in ("cheap-fast", "big-slow") if n in h)]
+    assert order() == ["cheap-fast", "big-slow"]  # best return first
+    assert req(base + "/sort", {"sort": "profit"})[0] == 303 and order() == ["big-slow", "cheap-fast"]
+    assert req(base + "/sort", {"sort": "nope"})[0] == 400
+    assert req(base + "/min-profit", {"min_profit": "5g"})[0] == 303 and order() == ["big-slow"]
+    assert req(base + "/min-profit", {"min_profit": "1s"})[0] == 303
+    assert req(base + "/hide", {"item_id": "2"})[0] == 303 and order() == ["cheap-fast"]
+    assert "Show 1 hidden" in req(base + "/")[1]
+    assert req(base + "/unhide", {})[0] == 303 and len(order()) == 2
+
+
+def test_version_changes_when_a_scan_starts(server):
+    path, base, port = server
+    idle = req(base + "/version")[1]
+    assert f'data-v="{idle}"' in req(base + "/")[1] and req(base + "/static/app.js")[0] == 200
+    with web.scanner.busy:
+        assert req(base + "/version")[1] != idle
+
+
+def test_saved_vendor_pick_for_a_limited_stock_item_is_not_shown(monkeypatch):
+    from wow_invest.tables import VENDOR_ITEMS
+    c = db.connect(":memory:")
+    db.save_candidates(c, [mkpick(8846, "Gromsblood", kind="vendor"), mkpick(2320, "Coarse Thread", kind="vendor"),
+                           mkpick(8846, "Gromsblood", kind="flip")], NOW.isoformat())
+    monkeypatch.setitem(VENDOR_ITEMS, 8846, 5)
+    assert [(p.kind, p.name) for p in build_state(c, NOW)["plan"].ranked] == [("vendor", "Coarse Thread"), ("flip", "Gromsblood")]
+
+
+def test_choosing_professions_filters_crafting_picks(server):
+    path, base, port = server
+    c = db.connect(path)
+    db.set_gold(c, 10**9)
+    db.save_candidates(c, [replace(mkpick(1, "a-bag", kind="craft"), profession="Tailoring"),
+                           replace(mkpick(2, "a-scope", kind="craft"), profession="Engineering"),
+                           # saved before picks carried a profession: read from the reason
+                           replace(mkpick(3, "a-stew", kind="craft"), reason="Craft 2× with Cooking (skill 50): …"),
+                           mkpick(4, "a-flip")], NOW.isoformat())
+    seen = lambda: {n for n in ("a-bag", "a-scope", "a-stew", "a-flip") if n in req(base + "/?tab=all")[1]}
+    assert seen() == {"a-bag", "a-scope", "a-stew", "a-flip"}
+    assert req(base + "/profession", {"profession": "Tailoring"})[0] == 303 and seen() == {"a-bag", "a-flip"}
+    assert '<option value="Tailoring" selected>' in req(base + "/?tab=craft")[1]
+    assert req(base + "/profession", {"profession": "Cooking"})[0] == 303 and seen() == {"a-stew", "a-flip"}
+    assert req(base + "/profession", {"profession": "Juggling"})[0] == 400
+    assert req(base + "/profession", {"profession": ""})[0] == 303 and len(seen()) == 4  # All
+
+
+def test_item_type_list_filters_every_pick(server):
+    path, base, port = server
+    c = db.connect(path)
+    db.set_gold(c, 10**9)
+    rows = [Row(i, n, None, None, cls, None, None, None, 100, None, 10, 1, 5, None)
+            for i, n, cls in ((1, "a-sword", "Weapon"), (2, "a-herb", "Trade Goods"), (3, "a-pet", "Miscellaneous"))]
+    db.save_scan(c, "alliance", NOW.isoformat(), NOW.isoformat(), 0.05, rows)
+    db.save_candidates(c, [mkpick(r.item_id, r.name) for r in rows], NOW.isoformat())
+    seen = lambda: {n for n in ("a-sword", "a-herb", "a-pet") if n in req(base + "/")[1]}
+    assert len(seen()) == 3 and '<option value="">All item types</option>' in req(base + "/")[1]
+    assert req(base + "/type", {"type": "gear"})[0] == 303 and seen() == {"a-sword"}
+    assert '<option value="gear" selected>' in req(base + "/")[1]
+    assert req(base + "/type", {"type": "mats"})[0] == 303 and seen() == {"a-herb"}
+    assert req(base + "/type", {"type": "other"})[0] == 303 and seen() == {"a-pet"}
+    assert req(base + "/type", {"type": "junk"})[0] == 400
+    assert req(base + "/type", {"type": ""})[0] == 303 and len(seen()) == 3
+
+
+def test_page_says_how_many_picks_the_profit_limits_hide(server):
+    path, base, port = server
+    c = db.connect(path)
+    db.save_candidates(c, [replace(mkpick(1, "small"), profit=40000), replace(mkpick(2, "big"), profit=900000)], NOW.isoformat())
+    assert "more picks are hidden" not in req(base + "/")[1]
+    assert req(base + "/min-profit", {"min_profit": "50g"})[0] == 303
+    assert "1 more picks are hidden by the two profit limits" in req(base + "/")[1]

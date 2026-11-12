@@ -8,7 +8,7 @@ from .models import Pick
 from .pricing import (change, days_to_sell, deposit, going_price, history_hours, ladder_buy,
                       listed_units, max_units, net_proceeds, sales_per_day, sales_per_day_window,
                       score, sureness, undercut, window_median)
-from .tables import VENDOR_ITEMS
+from .tables import GATHER_BANDS, VENDOR_ITEMS, VENDOR_WHERE
 
 
 def _money(cu):
@@ -56,9 +56,7 @@ def _build(kind, row, sell, held, now, buy_at, why, going=0, ladder=None, limit=
         return target if target is not None else undercut(min(going, left[0][0]) if left else going)
 
     if ladder is None:
-        stock = VENDOR_ITEMS.get(row.item_id)  # None: unlimited or unknown stock
-        qty = cap if stock is None else min(cap, stock)
-        cost, top, left = unit_cost * qty, unit_cost, sell.ladder
+        qty, cost, top, left = cap, unit_cost * cap, unit_cost, sell.ladder
     else:
         while True:  # no unit may cost more than it nets; buying less can lower our own list price, so repeat
             qty, cost, top = ladder_buy(ladder, limit, cap)
@@ -71,9 +69,10 @@ def _build(kind, row, sell, held, now, buy_at, why, going=0, ladder=None, limit=
         return None
     target = price(left)
     profit = net_proceeds(target, qty, sell.cut, dep) - cost
-    if kind == "hold":  # a hold waits for the recovery, so it never scores as selling instantly
-        days = min(c.HOLD_DAYS, 1 + days_to_sell(qty, spd))
-        sell_by = now + timedelta(days=c.HOLD_DAYS)
+    wait = {"hold": c.HOLD_DAYS, "rise": c.RISE_DAYS, "trend": c.INVEST_DAYS}.get(kind)
+    if wait:  # these wait for the price to move, so they never score as selling instantly
+        days = min(wait, 1 + days_to_sell(qty, spd))
+        sell_by = now + timedelta(days=wait)
     else:
         days = days_to_sell(qty, spd)
         sell_by = now + timedelta(days=max(1, math.ceil(days)))
@@ -98,8 +97,32 @@ def _flip(kind, row, buy, sell, held, now):
                   limit=int(c.BUY_BELOW * going))
 
 
+def _snipe(row, d, held, now):
+    """Underpriced listings: a lot at least 20% under the next price on the ladder, small enough to
+    resell within hours. It is measured against the listings there now, not yesterday's price, so it
+    also holds while a price is falling."""
+    going = going_price(d.series, now)
+    room = math.floor(sales_per_day(d.series, now) * c.CAPTURE_SHARE * c.SNIPE_DAYS)
+    qty, found = 0, None
+    for (price, units), (wall, _) in zip(d.ladder, d.ladder[1:]):
+        qty += units
+        if qty > room:
+            break
+        if price <= c.BUY_BELOW * wall:
+            found = price, wall
+    if going is None or found is None:
+        return None
+    limit, wall = found
+    wall = min(wall, going)  # a thin wall far above the usual price is not the price it will sell at
+
+    def why(top):
+        return (f"Underpriced: listed at up to {_money(top)}, {1 - top / wall:.0%} under the next price of"
+                f" {_money(wall)}, and few enough to resell within hours")
+    return _build("flip", row, d, held, now, d.house, why, going=wall, ladder=d.ladder, limit=limit)
+
+
 def quick_flip(row, d, held, now):
-    return _flip("flip", row, d, d, held, now)
+    return _flip("flip", row, d, d, held, now) or _snipe(row, d, held, now)
 
 
 def cross_flip(row, buy, sell, held, now):
@@ -108,12 +131,14 @@ def cross_flip(row, buy, sell, held, now):
 
 def vendor_flip(row, d, held, now):
     going = going_price(d.series, now)
-    if (row.item_id not in VENDOR_ITEMS or not d.purchase_price or going is None
+    # items every vendor runs out of (a few per restock) are left out: not worth a trip
+    if (VENDOR_ITEMS.get(row.item_id, 0) is not None or not d.purchase_price or going is None
             or not _trend_ok(d.series, now)):
         return None
     unit = math.ceil(d.purchase_price / d.purchase_quantity)
-    limited = " (few vendors carry it, so stock is probably limited)" if VENDOR_ITEMS[row.item_id] else ""
-    text = f"A vendor sells it for {_money(unit)}{limited} and it goes for {_money(going)} on {d.house.title()}"
+    who = f": {VENDOR_WHERE[row.item_id]}" if VENDOR_WHERE.get(row.item_id) else ""
+    text = (f"A vendor sells it for {_money(unit)}{who} and it goes for {_money(going)}"
+            f" on {d.house.title()}")
     return _build("vendor", row, d, held, now, "vendor", lambda _: text, going=going, unit_cost=unit)
 
 
@@ -132,3 +157,71 @@ def hold(row, d, crowd, held, now):
             f" {_money(current)}, aiming for {_money(target)} within {c.HOLD_DAYS} days")
     return _build("hold", row, d, held, now, d.house, lambda _: text, ladder=d.ladder, limit=current,
                   target=target)
+
+
+def rise(row, d, behind, held, now):
+    """Forecast: the crowd has levelled past where this is farmed or used, so fewer people are
+    supplying it. Once the listed amount is shrinking and the price has stopped falling, bet on a rise."""
+    going = going_price(d.series, now)
+    trend, units = change(d.series, now, "min_ask"), change(d.series, now, "units")
+    if not behind or going is None or trend is None or units is None or trend < 0 or units > 0:
+        return None
+    target = round(going * (1 + c.RISE_GAIN))
+    text = (f"Forecast: players have levelled past it, {-units:.0%} fewer are listed than a day ago and the"
+            f" price is {trend:+.0%}; aiming for {_money(target)} within {c.RISE_DAYS} days, up from {_money(going)}")
+    return _build("rise", row, d, held, now, d.house, lambda _: text, ladder=d.ladder, limit=going,
+                  target=target)
+
+
+def trend(row, d, held, now):
+    """Multi-day investment: the price has been climbing for a day, the item still sells as before and
+    sellers are not piling in. Bet that the climb continues."""
+    going = going_price(d.series, now)
+    up, units = change(d.series, now, "min_ask"), change(d.series, now, "units")
+    if (going is None or up is None or units is None or up < c.TREND_MIN or units >= c.FLOOD_UNITS_RISE
+            or not _sales_hold(d.series, now)):
+        return None
+    target = round(going * (1 + c.RISE_GAIN))
+    text = (f"Rising: the price is {up:+.0%} against a day ago, sales are holding and the listed amount is"
+            f" {units:+.0%}; aiming for {_money(target)} within {c.INVEST_DAYS} days, up from {_money(going)}")
+    return _build("trend", row, d, held, now, d.house, lambda _: text, ladder=d.ladder, limit=going, target=target)
+
+
+def craft_ladder(mats, made, limit):
+    """What each crafted unit costs in materials, cheapest first, as a (unit_price, units) ladder.
+    `mats` is [(count per craft, ladder)] with a vendor reagent as a one-step ladder."""
+    left = [(count, [list(step) for step in ladder]) for count, ladder in mats]
+    out = []
+    while sum(u for _, u in out) < limit:
+        cost = 0
+        for count, ladder in left:
+            need = count
+            while need and ladder:
+                take = min(need, ladder[0][1])
+                cost, need = cost + take * ladder[0][0], need - take
+                ladder[0][1] -= take
+                if not ladder[0][1]:
+                    ladder.pop(0)
+            if need:  # this reagent ran out
+                return out
+        out.append((math.ceil(cost / made), made))
+    return out
+
+
+def craft_flip(row, d, recipe, mats, held, now):
+    """Buy the reagents, craft, sell the product. `mats` is [(name, count, ladder, from_vendor)]."""
+    _, prof, skill, made, _ = recipe
+    going = going_price(d.series, now)
+    if going is None or not _trend_ok(d.series, now):
+        return None
+    ladder = craft_ladder([(n, lad) for _, n, lad, _ in mats], made, c.CRAFT_MAX_UNITS)
+    p = _build("craft", row, d, held, now, "craft", lambda _: "", going=going, ladder=ladder,
+               limit=int(c.BUY_BELOW * going))
+    if p is None or p.qty < made:
+        return None
+    p.profession = prof
+    crafts = math.ceil(p.qty / made)
+    need = ", ".join(f"{crafts * n}× {name} ({'vendor' if vend else 'AH'})" for name, n, _, vend in mats)
+    p.reason = (f"Craft {crafts}× with {prof} (skill {skill}): {need}. Materials up to {_money(p.max_unit_price)}"
+                f" a piece, it goes for {_money(going)} on {d.house.title()}" + p.reason)
+    return p

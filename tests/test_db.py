@@ -1,6 +1,8 @@
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import timedelta
+
+import pytest
 
 from tests.conftest import NOW
 from wow_invest import db
@@ -175,3 +177,13 @@ def test_connect_upgrades_old_holdings_table(tmp_path):
     assert db.open_holdings(c)[0].sell_at == "alliance"
     db.add_holding(c, 2, "cross", 1, 5, 6, NOW, None, "blackwater")
     assert db.open_holdings(c)[1].sell_at == "blackwater"
+
+
+def test_crowd_drift_is_levels_per_day_over_our_scans():
+    c = conn()
+    gear = lambda item_id, lvl: replace(row(item_id), class_name="Armor", required_level=lvl, sold_24h=10)
+    assert db.crowd_drift(c, NOW) is None
+    db.save_scan(c, "alliance", iso(NOW - timedelta(days=2)), iso(NOW), 0.05, [gear(1, 20)])
+    db.save_scan(c, "alliance", iso(NOW), iso(NOW), 0.05, [gear(1, 20), gear(2, 24)])
+    assert db.crowd_drift(c, NOW) == pytest.approx(1.0)  # mean level 20 → 22 in two days
+    assert db.crowd_drift(c, NOW + timedelta(days=6)) is None  # under a day of scans left in the week

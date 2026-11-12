@@ -2,7 +2,7 @@
 
 A desktop auction-house advisor for World of Warcraft. It watches prices, then suggests what to buy and what to sell, with the profit it expects after the auction house cut.
 
-Built for **WoW Forever, EU, Normal (PvE), Alliance**, plus the **Blackwater** AH. Other realms and factions are not covered.
+Built for **WoW Forever, EU, Normal (PvE), Alliance**. The neutral **Blackwater** AH is switched off for now (`SCAN_HOUSES` in `wow_invest/config.py` turns it back on). Other realms and factions are not covered.
 
 It reads the public [blackwater.exchange](https://blackwater.exchange) API politely: about one request a second, and only when the site has a new scan. It is not affiliated with Blizzard or blackwater.exchange.
 

@@ -2,6 +2,7 @@
 Closing the window quits the program."""
 import logging
 import os
+import subprocess
 import threading
 from pathlib import Path
 
@@ -24,6 +25,19 @@ def _brand_window(window):
         log.exception("could not set the window icon")
 
 
+def _toast(text: str):
+    """A Windows tray balloon, through PowerShell so no extra package is needed."""
+    text = "".join(ch for ch in text if ch.isalnum() or ch in " +,.:-")  # nothing that could end the quoted string
+    script = ("Add-Type -AssemblyName System.Windows.Forms; $n = New-Object System.Windows.Forms.NotifyIcon; "
+              f"$n.Icon = New-Object System.Drawing.Icon('{ICON}'); $n.Visible = $true; "
+              f"$n.ShowBalloonTip(10000, 'WoW Invest', '{text}', 'None'); Start-Sleep 10; $n.Dispose()")
+    try:
+        subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError:
+        log.exception("could not show a notification")
+
+
 def default_db_path() -> str:
     base = os.environ.get("LOCALAPPDATA")
     return str(Path(base) / "WowInvest" / "wow_invest.db") if base else "data/wow_invest.db"
@@ -43,6 +57,7 @@ def run(webview=None, db_path: str | None = None) -> int:
     threading.Thread(target=scanner.loop, args=(api.Client, db_path, stop), daemon=True).start()
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     if os.name == "nt":  # own taskbar group, so Windows doesn't file the window under Python
+        scanner.notify = _toast
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("WowInvest.App")
     window = webview.create_window("WoW Invest", url, width=1240, height=960, background_color="#14100b")

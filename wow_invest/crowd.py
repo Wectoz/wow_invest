@@ -3,11 +3,17 @@ from . import config
 from .tables import GATHER_BANDS
 
 
-def estimate_crowd(rows):
+def level_sales(rows) -> dict[int, int]:
+    """Equipment sold in the last 24h by required level: where the players are."""
     w = {}
     for r in rows:
         if r.class_name in ("Armor", "Weapon") and (r.required_level or 0) > 0 and r.sold_24h > 0:
             w[r.required_level] = w.get(r.required_level, 0) + r.sold_24h
+    return w
+
+
+def estimate_crowd(rows):
+    w = level_sales(rows)
     total = sum(w.values())
     if total < config.CROWD_MIN_SALES:
         return config.CROWD_PRIOR

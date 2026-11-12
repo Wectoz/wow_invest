@@ -23,7 +23,7 @@ def _top(picks: list[Pick], n: int) -> list[Pick]:
     return sorted(picks, key=lambda p: -p.score)[:n]
 
 
-def _fit(p: Pick, limit: int) -> Pick:
+def _fit(p: Pick, limit: int, min_profit: int) -> Pick:
     """Funded copy of p if it fits in limit (partially filled if needed), else p unchanged."""
     if p.cost <= limit:
         return replace(p, funded=True)
@@ -32,17 +32,20 @@ def _fit(p: Pick, limit: int) -> Pick:
     # linear scaling over a cheapest-first ladder overstates cost, so the estimate errs safe
     q = p.qty * limit // p.cost if p.cost > 0 else 0
     profit = int(p.profit * q / p.qty) if p.qty else 0
-    if q == 0 or profit < C.MIN_PROFIT:
+    if q == 0 or profit < min_profit:
         return p
     return replace(p, qty=q, cost=int(p.cost * q / p.qty), profit=profit, funded=True)
 
 
-def plan(candidates: list[Pick], gold: int, holdings: list[Holding], proven: bool) -> Plan:
-    cands = [p for p in candidates if p.profit >= C.MIN_PROFIT]
-    is_paper = lambda p: p.kind == "hold" and not proven
+def plan(candidates: list[Pick], gold: int, holdings: list[Holding], proven: bool,
+         min_profit: int | None = None, min_unit: int | None = None) -> Plan:
+    min_profit = C.MIN_PROFIT if min_profit is None else min_profit
+    min_unit = C.MIN_UNIT_PROFIT if min_unit is None else min_unit
+    cands = [p for p in candidates if p.profit >= min_profit and p.profit >= min_unit * p.qty]
+    is_paper = lambda p: p.kind in ("rise", "trend") or (p.kind == "hold" and not proven)  # bets are never funded
     pool = best_per_item([p for p in cands if not is_paper(p)])
-    taken = {p.item_id for p in pool}  # a paper hold must not hide a buy
-    paper = [p for p in best_per_item([p for p in cands if is_paper(p)]) if p.item_id not in taken]
+    # kept apart from the buys, so a multi-day bet on an item never hides (or is hidden by) a flip of it
+    paper = best_per_item([p for p in cands if is_paper(p)])
     ranked, paper = _top(pool, C.TOP_N), _top(paper, C.TOP_N)
 
     open_hold = sum(h.price_paid for h in holdings if h.kind == "hold" and h.sold_at is None)
@@ -52,7 +55,7 @@ def plan(candidates: list[Pick], gold: int, holdings: list[Holding], proven: boo
         limit = remaining
         if p.kind == "hold" and proven:
             limit = min(remaining, int(hold_room))
-        f = _fit(p, max(limit, 0))
+        f = _fit(p, max(limit, 0), min_profit)
         if f.funded:
             remaining -= f.cost
             if p.kind == "hold":

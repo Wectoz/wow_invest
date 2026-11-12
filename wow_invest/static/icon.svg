@@ -1,32 +1,52 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
   <defs>
-    <radialGradient id="bg" cx="50%" cy="35%" r="70%">
-      <stop offset="0" stop-color="#3a2b18"/>
-      <stop offset="1" stop-color="#14100b"/>
-    </radialGradient>
-    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f0d08a"/>
-      <stop offset="0.5" stop-color="#c59e60"/>
-      <stop offset="1" stop-color="#6b4a22"/>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbe7a1"/>
+      <stop offset="0.35" stop-color="#c8963c"/>
+      <stop offset="0.7" stop-color="#7a5318"/>
+      <stop offset="1" stop-color="#e2b659"/>
     </linearGradient>
-    <radialGradient id="coin" cx="40%" cy="35%" r="70%">
-      <stop offset="0" stop-color="#ffe9a8"/>
-      <stop offset="0.55" stop-color="#e3b44a"/>
-      <stop offset="1" stop-color="#8a5f1c"/>
+    <radialGradient id="bg" cx="50%" cy="40%" r="75%">
+      <stop offset="0" stop-color="#3b2413"/>
+      <stop offset="0.6" stop-color="#170d07"/>
+      <stop offset="1" stop-color="#060303"/>
     </radialGradient>
+    <radialGradient id="coin" cx="38%" cy="30%" r="80%">
+      <stop offset="0" stop-color="#fff3bf"/>
+      <stop offset="0.45" stop-color="#f0c040"/>
+      <stop offset="0.85" stop-color="#a96f12"/>
+      <stop offset="1" stop-color="#6b4208"/>
+    </radialGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c58a1e"/>
+      <stop offset="1" stop-color="#5e3a07"/>
+    </linearGradient>
   </defs>
-  <rect x="8" y="8" width="240" height="240" rx="44" fill="url(#bg)" stroke="url(#rim)" stroke-width="12"/>
-  <!-- coin stack -->
-  <g stroke="#5a3d14" stroke-width="4">
-    <ellipse cx="104" cy="186" rx="58" ry="17" fill="#b98a34"/>
-    <rect x="46" y="166" width="116" height="20" fill="#b98a34" stroke="none"/>
-    <ellipse cx="104" cy="166" rx="58" ry="17" fill="url(#coin)"/>
-    <ellipse cx="104" cy="146" rx="58" ry="17" fill="#b98a34"/>
-    <rect x="46" y="126" width="116" height="20" fill="#b98a34" stroke="none"/>
-    <ellipse cx="104" cy="126" rx="58" ry="17" fill="url(#coin)"/>
+  <!-- the square frame of a spell-book icon: dark steel, gold bevel, inner shadow -->
+  <rect x="4" y="4" width="248" height="248" rx="30" fill="#0b0705"/>
+  <rect x="12" y="12" width="232" height="232" rx="24" fill="url(#bg)" stroke="url(#rim)" stroke-width="12"/>
+  <rect x="24" y="24" width="208" height="208" rx="16" fill="none" stroke="#000" stroke-opacity=".55" stroke-width="5"/>
+  <!-- corner rivets -->
+  <g fill="url(#coin)" stroke="#4a2e06" stroke-width="2">
+    <circle cx="30" cy="30" r="7"/><circle cx="226" cy="30" r="7"/>
+    <circle cx="30" cy="226" r="7"/><circle cx="226" cy="226" r="7"/>
   </g>
-  <!-- rising arrow -->
-  <polyline points="70,104 112,70 140,90 196,44" fill="none" stroke="#7fd05a" stroke-width="16"
-            stroke-linecap="round" stroke-linejoin="round"/>
-  <polygon points="214,28 214,78 166,34" fill="#7fd05a"/>
+  <!-- two coins lying behind -->
+  <g stroke="#3d2504" stroke-width="4">
+    <ellipse cx="86" cy="196" rx="52" ry="16" fill="url(#edge)"/>
+    <ellipse cx="86" cy="186" rx="52" ry="16" fill="url(#coin)"/>
+    <ellipse cx="170" cy="204" rx="52" ry="16" fill="url(#edge)"/>
+    <ellipse cx="170" cy="194" rx="52" ry="16" fill="url(#coin)"/>
+  </g>
+  <!-- the coin: thick rim, beaded ring, a rising arrow struck into it -->
+  <circle cx="128" cy="118" r="80" fill="url(#edge)" stroke="#3d2504" stroke-width="5"/>
+  <circle cx="128" cy="112" r="78" fill="url(#coin)" stroke="#3d2504" stroke-width="5"/>
+  <circle cx="128" cy="112" r="62" fill="none" stroke="#7a4d0a" stroke-width="4" stroke-dasharray="3 9" stroke-linecap="round"/>
+  <circle cx="128" cy="112" r="52" fill="none" stroke="#fff3bf" stroke-opacity=".5" stroke-width="2"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 152 V78 M98 106 L128 74 L158 106" stroke="#5e3a07" stroke-width="22"/>
+    <path d="M128 150 V78 M100 104 L128 74 L156 104" stroke="#fff0b0" stroke-width="10"/>
+  </g>
+  <!-- glint -->
+  <path d="M74 84 A62 62 0 0 1 118 52" fill="none" stroke="#fff" stroke-opacity=".65" stroke-width="7" stroke-linecap="round"/>
 </svg>

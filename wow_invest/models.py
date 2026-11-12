@@ -45,7 +45,7 @@ class Detail:
 
 @dataclass(slots=True)
 class Pick:
-    kind: str  # flip | cross | vendor | hold
+    kind: str  # flip | cross | vendor | craft | hold | rise | trend
     item_id: int
     name: str
     icon: str | None
@@ -67,6 +67,7 @@ class Pick:
     sell_by: datetime | None = None
     funded: bool = False
     listed: int = 0  # median units listed on the sell house over the last 24h
+    profession: str = ""  # crafting picks: the profession that makes it
 
 
 @dataclass(slots=True)

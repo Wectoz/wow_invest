@@ -97,10 +97,24 @@ def test_best_per_item_keeps_highest_score():
 
 def test_paper_hold_does_not_hide_flip_for_same_item():
     out = plan([pk("hold", 5, score=9.0), pk("flip", 5, score=1.0)], 10**9, [], False)
-    assert [p.kind for p in out.ranked] == ["flip"] and not out.paper
+    assert [p.kind for p in out.ranked] == ["flip"] and [p.kind for p in out.paper] == ["hold"]
 
 
 def test_exhausted_hold_cap_still_funds_later_flips():
     h, f = pk("hold", cost=100 * G, profit=50 * G, score=2.0), pk("flip", cost=100 * G, score=1.0)
     out = plan([h, f], 600 * G, [held(200 * G)], True)  # cap 0.25*800=200 -> room 0
     assert [p.funded for p in out.ranked] == [False, True]
+
+
+def test_forecasts_stay_on_paper_even_when_holds_are_proven():
+    out = plan([pk("rise", 5), pk("flip", 6)], 10**9, [], True)
+    assert [p.kind for p in out.ranked] == ["flip"] and [p.kind for p in out.paper] == ["rise"]
+    assert not out.paper[0].funded
+
+
+def test_picks_earning_too_little_per_item_are_dropped():
+    from dataclasses import replace
+    arrows = replace(pk("vendor", 1), qty=4000, profit=10000)  # 2.5c an arrow
+    bags = replace(pk("craft", 2), qty=9, profit=96000)
+    assert [p.item_id for p in plan([arrows, bags], 10**9, [], False, min_profit=0, min_unit=10).ranked] == [2]
+    assert len(plan([arrows, bags], 10**9, [], False, min_profit=0, min_unit=2).ranked) == 2

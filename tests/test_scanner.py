@@ -8,7 +8,7 @@ from datetime import timedelta
 import pytest
 
 from tests.conftest import NOW, pts, steady
-from wow_invest import config, db, scanner
+from wow_invest import config, db, planner, scanner
 from wow_invest.api import ApiError
 from wow_invest.models import Detail, Row
 from wow_invest.scanner import run_cycle
@@ -156,9 +156,10 @@ def test_cross_candidates_buy_on_the_cheaper_house():
 def test_flooded_item_in_the_crowd_band_becomes_a_paper_hold(units, picked, monkeypatch):
     herb = 785  # Mageroyal, band (10, 25) overlaps the default crowd (20, 30)
     monkeypatch.delitem(VENDOR_ITEMS, herb, raising=False)  # a herb vendor stocks it; not this test's subject
+    monkeypatch.setattr(scanner, "_behind", lambda r, crowd: False)  # nor is the forecast
     conn = db.connect(":memory:")
     day_ago = (NOW - timedelta(hours=25)).isoformat()
-    db.save_scan(conn, "alliance", day_ago, day_ago, 0.05, [row(herb, units=1000)])
+    db.save_scan(conn, "alliance", day_ago, day_ago, 0.05, [row(herb, min_ask=60000, units=1000)])
     flood = pts([(h, 1500, 60000, 0, 4) for h in range(24)] + [(h, 1000, 100000, 0, 4) for h in range(24, 48)])
     fc = FakeClient([row(herb, min_ask=60000, units=units)],
                     details={("alliance", herb): detail(herb, series=flood, ladder=[(60000, 100)])})
@@ -348,3 +349,99 @@ def test_forced_cycle_rebuilds_picks_from_an_unchanged_scan():
     assert run_cycle(fc, conn, NOW, force=True) == "done"
     assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("flip", FLIP)]
     assert conn.execute("SELECT count(*) FROM scans").fetchone()[0] == 2  # no duplicate scan rows
+
+
+def lvl(item_id, level, sold, cls="Armor"):
+    return replace(row(item_id, sold=sold), class_name=cls, required_level=level)
+
+
+def test_forecast_picks_come_from_items_the_crowd_levelled_past():
+    low, current = 100002, 100003  # level bands (3, 8) and (18, 23); the default crowd is 20-30
+    drying = pts([(h, 1000, 20000, 0, 4) for h in range(24)] + [(h, 1500, 20000, 0, 4) for h in range(24, 48)])
+    fc = FakeClient([lvl(low, 5, 60), lvl(current, 20, 60)],  # too few sales to move the crowd estimate
+                    details={("alliance", i): detail(i, series=drying, ladder=[(20000, 30)]) for i in (low, current)})
+    conn = db.connect(":memory:")
+    assert run_cycle(fc, conn, NOW) == "done"
+    assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("rise", low)]
+    assert ("alliance", current) not in fc.fetched[2:]  # never a candidate: only the static backfill asked
+
+
+def test_alliance_only_scan_never_touches_blackwater(monkeypatch):
+    monkeypatch.setattr(scanner, "HOUSES", ("alliance",))
+    fc = flip_client(fail={"blackwater"})
+    fc.times.pop("blackwater")
+    conn = db.connect(":memory:")
+    assert run_cycle(fc, conn, NOW) == "done"
+    assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("flip", FLIP)]
+    assert fc.calls["all_items"] == 1 and count(conn, "scans") == 1
+
+
+def test_timed_cycle_remembers_how_long_a_full_scan_takes():
+    conn = db.connect(":memory:")
+    assert scanner._timed(conn, lambda: "no-change") == "no-change" and db.get_setting(conn, "scan_secs") is None
+    assert scanner._timed(conn, lambda: "done") == "done" and db.get_setting(conn, "scan_secs") == "1"
+
+
+def test_craft_pick_prices_reagents_from_the_ah_and_the_vendor(monkeypatch):
+    product, bolt, thread = 100010, 100011, 100012
+    monkeypatch.setattr(scanner, "RECIPES", [(product, "Tailoring", 125, 1, ((bolt, 2), (thread, 1))),
+                                             (product, "Tailoring", 300, 1, ((bolt, 1),))])
+    monkeypatch.setitem(VENDOR_ITEMS, thread, None)
+    conn = db.connect(":memory:")
+    db.set_setting(conn, "skills", '{"Tailoring": 150}')  # the cheaper skill-300 recipe is out of reach
+    db.save_static(conn, replace(detail(thread, purchase_price=500), required_level=None))
+    fc = FakeClient([replace(row(product), name="Shirt"), replace(row(bolt, min_ask=4000), name="Bolt")],
+                    details={("alliance", product): detail(product, ladder=[(19900, 100)]),
+                             ("alliance", bolt): detail(bolt, ladder=[(4000, 6), (9000, 100)])})
+    assert run_cycle(fc, conn, NOW) == "done"
+    (p,) = [p for p in db.load_candidates(conn)[0] if p.kind == "craft"]
+    assert (p.item_id, p.qty, p.cost) == (product, 3, 25500) and "3× Item 100012 (vendor)" in p.reason
+    assert ("alliance", thread) not in fc.fetched[1:]  # the vendor reagent costs no request beyond static backfill
+    db.set_setting(conn, "skills", '{"Tailoring": 100}')
+    assert run_cycle(fc, conn, NOW, force=True) == "done"
+    assert [p for p in db.load_candidates(conn)[0] if p.kind == "craft"] == []
+    db.set_setting(conn, "skills", "{}")
+    db.set_setting(conn, "professions", '["Cooking"]')  # not the profession that makes it
+    assert run_cycle(fc, conn, NOW, force=True) == "done"
+    assert [p for p in db.load_candidates(conn)[0] if p.kind == "craft"] == []
+    db.set_setting(conn, "professions", '["Tailoring"]')
+    assert run_cycle(fc, conn, NOW, force=True) == "done"
+    assert [p.profession for p in db.load_candidates(conn)[0] if p.kind == "craft"] == ["Tailoring"]
+
+
+def test_strong_new_pick_notifies_but_not_on_the_first_scan_or_again(monkeypatch):
+    said = []
+    monkeypatch.setattr(scanner, "notify", said.append)
+    monkeypatch.setattr(config, "NOTIFY_PROFIT", 50000)
+    fc, conn, other = flip_client(), db.connect(":memory:"), 100005
+    seed = FakeClient([row(other)], deals=[other], details={("alliance", other): detail(other, ladder=WALL)})
+    assert run_cycle(seed, conn, NOW) == "done" and said == []  # first scan: nothing to compare with
+    assert run_cycle(fc, conn, NOW, force=True) == "done"
+    assert said == ["New pick: Item 100001, about +8g 85s"]
+    assert run_cycle(fc, conn, NOW, force=True) == "done" and len(said) == 1  # already known
+
+
+def test_a_sudden_price_drop_is_a_flip_candidate_without_the_deals_list():
+    dropped, steady_item = 100020, 100021
+    conn = db.connect(":memory:")
+    hour_ago = (NOW - timedelta(hours=1)).isoformat()
+    db.save_scan(conn, "alliance", hour_ago, hour_ago, 0.05, [row(dropped, min_ask=20000), row(steady_item)])
+    fc = FakeClient([row(dropped, min_ask=12000), row(steady_item)], deals=[],
+                    details={("alliance", dropped): detail(dropped, ladder=WALL)})
+    assert run_cycle(fc, conn, NOW) == "done"
+    assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("flip", dropped)]
+    assert ("alliance", steady_item) not in fc.fetched[2:]  # only the static backfill ever asks for it
+
+
+def test_a_day_long_price_climb_becomes_a_paper_investment():
+    item = 100030
+    conn = db.connect(":memory:")
+    day_ago = (NOW - timedelta(hours=25)).isoformat()
+    db.save_scan(conn, "alliance", day_ago, day_ago, 0.05, [row(item, min_ask=10000, units=300)])
+    climb = pts([(h, 300, 20000, 0, 4) for h in range(24)] + [(h, 300, 10000, 0, 4) for h in range(24, 48)])
+    fc = FakeClient([row(item)], details={("alliance", item): detail(item, series=climb, ladder=[(20000, 30)])})
+    assert run_cycle(fc, conn, NOW) == "done"
+    (p,) = db.load_candidates(conn)[0]
+    assert (p.kind, p.sell_price, p.sell_by) == ("trend", 23000, NOW + timedelta(days=5))
+    assert "the price is +100% against a day ago" in p.reason
+    assert planner.plan([p], 10**9, [], True).ranked == []  # a bet: listed under Investments, never funded
