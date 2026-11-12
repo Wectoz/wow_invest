@@ -106,19 +106,15 @@ def cross_flip(row, buy, sell, held, now):
     return _flip("cross", row, buy, sell, held, now)
 
 
-def vendor_flip(row, d, held, confirmed, now):
+def vendor_flip(row, d, held, now):
     going = going_price(d.series, now)
-    if not d.purchase_price or going is None or not _trend_ok(d.series, now):
+    if (row.item_id not in VENDOR_ITEMS or not d.purchase_price or going is None
+            or not _trend_ok(d.series, now)):
         return None
     unit = math.ceil(d.purchase_price / d.purchase_quantity)
-    if row.item_id in VENDOR_ITEMS or row.item_id in confirmed:
-        kind, text = "vendor", f"A vendor sells it for {_money(unit)}"
-    elif going >= c.VENDOR_CHECK_RATIO * unit:
-        kind, text = "vendor_check", f"Check whether a vendor sells it for {_money(unit)}"
-    else:
-        return None
-    text += f" and it goes for {_money(going)} on {d.house.title()}"
-    return _build(kind, row, d, held, now, "vendor", lambda _: text, going=going, unit_cost=unit)
+    limited = " (few vendors carry it, so stock is probably limited)" if VENDOR_ITEMS[row.item_id] else ""
+    text = f"A vendor sells it for {_money(unit)}{limited} and it goes for {_money(going)} on {d.house.title()}"
+    return _build("vendor", row, d, held, now, "vendor", lambda _: text, going=going, unit_cost=unit)
 
 
 def hold(row, d, crowd, held, now):

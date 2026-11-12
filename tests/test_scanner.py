@@ -12,6 +12,7 @@ from wow_invest import config, db, scanner
 from wow_invest.api import ApiError
 from wow_invest.models import Detail, Row
 from wow_invest.scanner import run_cycle
+from wow_invest.tables import VENDOR_ITEMS
 
 CUT = {"alliance": 0.05, "blackwater": 0.15}
 WALL = [(12000, 10), (15000, 5), (19900, 100)]
@@ -152,8 +153,9 @@ def test_cross_candidates_buy_on_the_cheaper_house():
 
 
 @pytest.mark.parametrize("units, picked", [(1500, True), (1100, False)])
-def test_flooded_item_in_the_crowd_band_becomes_a_paper_hold(units, picked):
+def test_flooded_item_in_the_crowd_band_becomes_a_paper_hold(units, picked, monkeypatch):
     herb = 785  # Mageroyal, band (10, 25) overlaps the default crowd (20, 30)
+    monkeypatch.delitem(VENDOR_ITEMS, herb, raising=False)  # a herb vendor stocks it; not this test's subject
     conn = db.connect(":memory:")
     day_ago = (NOW - timedelta(hours=25)).isoformat()
     db.save_scan(conn, "alliance", day_ago, day_ago, 0.05, [row(herb, units=1000)])
@@ -205,14 +207,15 @@ def test_isolated_candidate_fetch_error_skips_that_candidate(monkeypatch):
     assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("flip", FLIP)]
 
 
-def test_vendor_candidate_still_gets_quick_flip():
-    # not a deal: a candidate only because 25000 per 5 is at most half its 20000 min_ask
+def test_vendor_candidate_still_gets_quick_flip(monkeypatch):
+    # not a deal: a candidate only because a vendor sells it
     item = 100002
+    monkeypatch.setitem(VENDOR_ITEMS, item, None)
     fc = FakeClient([row(item)], details={
         ("alliance", item): detail(item, ladder=WALL, purchase_price=25000, purchase_quantity=5)})
     conn = db.connect(":memory:")
     assert run_cycle(fc, conn, NOW) == "done"
-    assert sorted(p.kind for p in db.load_candidates(conn)[0]) == ["flip", "vendor_check"]
+    assert sorted(p.kind for p in db.load_candidates(conn)[0]) == ["flip", "vendor"]
 
 
 def test_builder_crash_skips_only_that_candidate(monkeypatch, caplog):
@@ -254,19 +257,20 @@ def test_outage_ends_cycle_marks_nothing_and_keeps_candidates():
     assert db.get_setting(conn, "candidates") == before
 
 
-def test_records_only_showable_picks():
+def test_records_only_showable_picks(monkeypatch):
     small, check = 100002, 100003
+    monkeypatch.setitem(VENDOR_ITEMS, check, None)
     fc = FakeClient([row(i) for i in (FLIP, small, check)], deals=[FLIP, small, check],
                     details={("alliance", FLIP): detail(FLIP, ladder=WALL),
                              ("alliance", small): detail(small, ladder=[(15000, 3)]),  # about 1.2g profit
-                             ("alliance", check): detail(check, purchase_price=5000)})  # vendor_check
+                             ("alliance", check): detail(check, purchase_price=5000)})  # vendor flip
     conn = db.connect(":memory:")
     assert run_cycle(fc, conn, NOW) == "done"
     picks = db.load_candidates(conn)[0]
-    # `check` is a deal too, but it is chosen once (as a vendor candidate), so its vendor_check is not doubled
-    assert sorted((p.kind, p.item_id) for p in picks) == [("flip", FLIP), ("flip", small), ("vendor_check", check)]
+    # `check` is a deal too, but it is chosen once (as a vendor candidate), so its vendor flip is not doubled
+    assert sorted((p.kind, p.item_id) for p in picks) == [("flip", FLIP), ("flip", small), ("vendor", check)]
     assert [p.score for p in picks] == sorted((p.score for p in picks), reverse=True)
-    assert recorded(conn) == [("flip", FLIP)]
+    assert sorted(recorded(conn)) == [("flip", FLIP), ("vendor", check)]  # `small` is under the minimum profit
 
 
 class FakeStop:
@@ -323,3 +327,24 @@ def test_loop_logs_errors_and_keeps_going(monkeypatch, tmp_path, caplog):
     scanner.loop(lambda: made.append(1) or "client", str(tmp_path / "w.db"), stop)
     assert seen == ["client", "client"] and made == [1]
     assert "RuntimeError: boom" in caplog.text and "done" in caplog.text
+
+
+def test_refresh_forces_a_cycle_unless_one_is_running(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(scanner, "run_cycle", lambda client, conn, now, force=False: calls.append(force) or "done")
+    with scanner.busy:
+        scanner.refresh(str(tmp_path / "w.db"), lambda: "client")
+    assert calls == []
+    scanner.refresh(str(tmp_path / "w.db"), lambda: "client")
+    assert calls == [True] and not scanner.busy.locked()
+
+
+def test_forced_cycle_rebuilds_picks_from_an_unchanged_scan():
+    fc = FakeClient([row(FLIP)], deals=[FLIP], details={("alliance", FLIP): detail(FLIP, ladder=WALL)})
+    conn = db.connect(":memory:")
+    assert run_cycle(fc, conn, NOW) == "done"
+    assert run_cycle(fc, conn, NOW) == "no-change"
+    db.set_setting(conn, "candidates", "")
+    assert run_cycle(fc, conn, NOW, force=True) == "done"
+    assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("flip", FLIP)]
+    assert conn.execute("SELECT count(*) FROM scans").fetchone()[0] == 2  # no duplicate scan rows

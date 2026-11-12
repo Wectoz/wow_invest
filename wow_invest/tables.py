@@ -2,9 +2,13 @@
 
 GATHER_BANDS: level range of the zones where players gather or loot the item. Covers herbs and
 ores; cloth and leather are also included (controller ruling), as they are farmed the same way.
-VENDOR_ITEMS: item id -> limited stock per restock, None = unlimited. Starter list of unlimited
-items only; limited-stock recipes are left for the user to confirm in the page.
+VENDOR_ITEMS: item id -> limited stock per restock, None = unlimited. Built from vendor_items.txt
+(every item an Alliance-friendly vendor sells, from the Questie addon database; rebuild it with
+scripts/vendor_ids.py), with the hand-checked unlimited staples on top.
 """
+from pathlib import Path
+
+from .config import VENDOR_COMMON
 
 GATHER_BANDS = {
     2447: (1, 15),  # Peacebloom
@@ -56,7 +60,7 @@ GATHER_BANDS = {
     8170: (45, 60),  # Rugged Leather
 }
 
-VENDOR_ITEMS = {
+_UNLIMITED = {
     2320: None,  # Coarse Thread, trade supplies
     2321: None,  # Fine Thread, trade supplies
     4291: None,  # Silken Thread, trade supplies
@@ -79,3 +83,13 @@ VENDOR_ITEMS = {
     17028: None,  # Holy Candle, reagent vendor
     5140: None,  # Flash Powder, poison supplies
 }
+
+
+def _vendor_items() -> dict[int, int | None]:
+    # shortcut: Questie has no stock numbers, so an item only a few vendors sell counts as one per
+    # restock (herbs, recipes); replace with real stock data if a source turns up
+    lines = (Path(__file__).parent / "vendor_items.txt").read_text().splitlines()
+    return {int(i): None if int(n) >= VENDOR_COMMON else 1 for i, n in map(str.split, lines)}
+
+
+VENDOR_ITEMS = {**_vendor_items(), **_UNLIMITED}

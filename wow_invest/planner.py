@@ -40,11 +40,10 @@ def _fit(p: Pick, limit: int) -> Pick:
 def plan(candidates: list[Pick], gold: int, holdings: list[Holding], proven: bool) -> Plan:
     cands = [p for p in candidates if p.profit >= C.MIN_PROFIT]
     is_paper = lambda p: p.kind == "hold" and not proven
-    pool = best_per_item([p for p in cands if p.kind != "vendor_check" and not is_paper(p)])
-    taken = {p.item_id for p in pool}  # a paper hold or check must not hide a buy
+    pool = best_per_item([p for p in cands if not is_paper(p)])
+    taken = {p.item_id for p in pool}  # a paper hold must not hide a buy
     paper = [p for p in best_per_item([p for p in cands if is_paper(p)]) if p.item_id not in taken]
-    checks = [p for p in best_per_item([p for p in cands if p.kind == "vendor_check"]) if p.item_id not in taken]
-    ranked, paper, checks = _top(pool, C.TOP_N), _top(paper, C.TOP_N), _top(checks, C.CHECKS_N)
+    ranked, paper = _top(pool, C.TOP_N), _top(paper, C.TOP_N)
 
     open_hold = sum(h.price_paid for h in holdings if h.kind == "hold" and h.sold_at is None)
     hold_room = C.HOLD_MAX_SHARE * (gold + open_hold) - open_hold
@@ -60,4 +59,4 @@ def plan(candidates: list[Pick], gold: int, holdings: list[Holding], proven: boo
                 hold_room -= f.cost
         out.append(f)
     funded = [p for p in out if p.funded]
-    return Plan(out, paper, checks, sum(p.cost for p in funded), sum(p.profit for p in funded))
+    return Plan(out, paper, sum(p.cost for p in funded), sum(p.profit for p in funded))

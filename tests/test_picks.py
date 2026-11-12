@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 
 from tests.conftest import NOW, pts, steady
-from wow_invest.config import MIN_PROFIT
+from wow_invest import config
 from wow_invest.models import Detail, Row
 from wow_invest.picks import cross_flip, hold, quick_flip, vendor_flip
 from wow_invest.planner import plan
@@ -44,13 +44,14 @@ def test_quick_flip_lists_under_going_when_wall_is_higher():
     assert (p.qty, p.cost, p.sell_price, p.depth) == (10, 120000, 19999, 0)
 
 
-def test_builders_return_none_without_24_48h_window():
+def test_builders_return_none_without_24_48h_window(monkeypatch):
     # ages 0–23: history 23h ≥ 12h and sure 23/48 ≥ 0.4, but change() has no 24–48h window
     young = pts([(h, 300, 20000, 0, 4) for h in range(24)])
     d = detail(series=young, ladder=WALL, purchase_price=5000)
     assert quick_flip(row(), d, held=0, now=NOW) is None
     assert cross_flip(row(), detail(house="blackwater", ladder=WALL), d, held=0, now=NOW) is None
-    assert vendor_flip(row(), d, held=0, confirmed={1}, now=NOW) is None
+    monkeypatch.setitem(VENDOR_ITEMS, 1, None)
+    assert vendor_flip(row(), d, held=0, now=NOW) is None
     assert hold(row(item_id=785), d, crowd=(20, 30), held=0, now=NOW) is None
 
 
@@ -108,7 +109,7 @@ def test_churn_on_a_small_house_is_not_a_pick():
     # median listed 717 → cap floor(179.25) = 179, all at 75c; sell undercut(min(141, 139)) = 138;
     # int(138 × 179 × 0.85) = 20996 − 13425 = 7571 (old rules: 1635 units, +54070, funded)
     assert (p.spd, p.listed, p.qty, p.cost, p.sell_price, p.profit) == (456, 717, 179, 13425, 138, 7571)
-    assert p.qty <= 0.25 * p.listed and p.profit < MIN_PROFIT
+    assert p.qty <= 0.25 * p.listed and p.profit < config.MIN_PROFIT
     assert plan([p], gold=10**9, holdings=[], proven=False).ranked == []
 
 
@@ -141,23 +142,24 @@ def test_cross_flip_buys_on_blackwater_sells_on_alliance_with_alliance_cut():
     assert (p.qty, p.cost, p.sell_price, p.profit, p.depth) == (15, 195000, 19499, 81735, 20)
 
 
-def test_vendor_flip_only_for_known_or_confirmed_items(monkeypatch):
+def test_vendor_flip_only_for_items_a_vendor_sells(monkeypatch):
     d = detail(ladder=[(19900, 100)], purchase_price=5000)
-    p = vendor_flip(row(vendor_sell=500), d, held=0, confirmed=set(), now=NOW)
+    assert vendor_flip(row(vendor_sell=500), d, held=0, now=NOW) is None  # item 1: no vendor sells it
+    assert vendor_flip(row(item_id=2320), d, held=0, now=NOW).kind == "vendor"
+    monkeypatch.setitem(VENDOR_ITEMS, 1, None)
+    p = vendor_flip(row(vendor_sell=500), d, held=0, now=NOW)
     # qty 60 (cap) at 5000 = 300000; int(19899*60*0.95)=1134243 − 75*60 − 300000
     assert (p.kind, p.buy_at, p.sell_at, p.qty, p.cost, p.max_unit_price, p.sell_price, p.profit) == \
-        ("vendor_check", "vendor", "alliance", 60, 300000, 5000, 19899, 829743)
+        ("vendor", "vendor", "alliance", 60, 300000, 5000, 19899, 829743)
     assert p.sell_by == NOW + timedelta(days=3)  # days 2.5
-    assert vendor_flip(row(vendor_sell=500), d, held=0, confirmed={1}, now=NOW).kind == "vendor"
-    assert vendor_flip(row(item_id=2320), d, held=0, confirmed=set(), now=NOW).kind == "vendor"
-    # unknown and going 20000 < 2 × 15000 → nothing
-    assert vendor_flip(row(), detail(purchase_price=15000), held=0, confirmed=set(), now=NOW) is None
-    assert vendor_flip(row(), detail(purchase_price=0), held=0, confirmed={1}, now=NOW) is None
+    assert "limited" not in p.reason
+    assert vendor_flip(row(), detail(purchase_price=0), held=0, now=NOW) is None
     # sold in stacks of 5 for 10001 → ceil(2000.2) = 2001 a unit
-    p = vendor_flip(row(), detail(purchase_price=10001, purchase_quantity=5), held=0, confirmed={1}, now=NOW)
+    p = vendor_flip(row(), detail(purchase_price=10001, purchase_quantity=5), held=0, now=NOW)
     assert (p.max_unit_price, p.cost) == (2001, 2001 * 60)
     monkeypatch.setitem(VENDOR_ITEMS, 1, 7)  # limited stock caps the quantity
-    assert vendor_flip(row(), d, held=0, confirmed=set(), now=NOW).qty == 7
+    p = vendor_flip(row(), d, held=0, now=NOW)
+    assert p.qty == 7 and "limited" in p.reason
 
 
 def test_hold_targets_half_recovery_and_three_day_sell_by():

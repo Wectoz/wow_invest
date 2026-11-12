@@ -2,6 +2,7 @@
 import logging
 import math
 import re
+import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from html import escape
@@ -11,7 +12,7 @@ from string import Template
 from urllib.parse import parse_qs, urlsplit
 
 from . import config as C
-from . import db
+from . import db, scanner
 from .planner import holds_proven, plan
 from .pricing import deposit, undercut
 
@@ -20,7 +21,7 @@ ICON_HOST = "https://render.worldofwarcraft.com/"
 MAX_BODY = 10_240
 MAX_GOLD = 10_000_000
 KINDS = {"flip": ("Quick flip", "flip"), "cross": ("Cross-AH", "flip"), "hold": ("Hold", "hold"),
-         "vendor": ("Vendor flip", "vendor"), "vendor_check": ("Check vendor", "vendor")}
+         "vendor": ("Vendor flip", "vendor")}
 QUALITY = {"uncommon": "green", "rare": "blue", "epic": "purple"}
 log = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ def build_state(conn, now: datetime) -> dict:
     return {
         "gold": db.get_gold(conn), "plan": p, "holdings": held, "stats": stats,
         "crowd": db.get_setting(conn, "crowd"), "stale": db.get_setting(conn, "stale") == "1",
-        "gathering": not cands and not history_ok,
+        "gathering": not cands and not history_ok, "scanning": scanner.busy.locked(),
         "last_scan": last_ok, "scan_age_min": int((now - last_ok).total_seconds() // 60) if last_ok else None,
         "auctions_at": auctions, "data_age_min": int((now - auctions).total_seconds() // 60) if auctions else None,
         # scans run hourly (the site's cadence), so the next one is expected an hour after the last
@@ -141,7 +142,7 @@ def route(p) -> str:
     if p.kind == "cross":
         a, b = (x.capitalize() for x in (p.buy_at, p.sell_at))
         return f"{a} → {b}"
-    if p.kind in ("vendor", "vendor_check"):
+    if p.kind == "vendor":
         return f"Vendor → {HOUSE.get(p.sell_at, p.sell_at)}"
     return HOUSE.get(p.sell_at, p.sell_at)
 
@@ -173,24 +174,19 @@ def _bought_form(p) -> str:
             f'<button>I bought this</button></form>')
 
 
-def _pick_row(p, rank=None, form=True, check=False, dim=False) -> str:
+def _pick_row(p, rank=None, form=True, dim=False) -> str:
     label, tcls = KINDS.get(p.kind, (p.kind, ""))
     unf = " unfunded" if dim and not p.funded else ""
     note = '<span class="note">not enough gold</span>' if unf else ""
     sb = f"<p>Sell by {_dhm(p.sell_by)}</p>" if p.sell_by else ""
-    if check:
-        side = '<form method="post" action="/vendor-confirm"><input type="hidden" name="item_id" value="%s">' \
-               '<button>A vendor sells this</button></form>' % esc(p.item_id)
-        body = ""
-    else:
-        side = (f'{p.qty} × {fmt_money(p.max_unit_price)} → {fmt_money(p.sell_price)}<br>'
-                f'<span class="profit">+{fmt_money(p.profit)}</span> · ~{p.days:.1f} days · sure '
-                f'<span class="conf"><i style="width:{int(p.sure * 100)}%"></i></span>')
-        trend = "trend unknown" if p.trend is None else f"price {p.trend * 100:+.0f}% vs a day ago"
-        body = (f'<details><summary>Why</summary><p>{esc(p.reason)}</p>'
-                f'<p>≈{p.spd:.0f} sold/day (estimate) · {p.listed} listed on the sell AH · {trend}'
-                f' · {p.depth} listed just above your price</p>{sb}</details>'
-                + (f'<details class="bought"><summary>I bought this</summary>{_bought_form(p)}</details>' if form else ""))
+    side = (f'{p.qty} × {fmt_money(p.max_unit_price)} → {fmt_money(p.sell_price)}<br>'
+            f'<span class="profit">+{fmt_money(p.profit)}</span> · ~{p.days:.1f} days · sure '
+            f'<span class="conf"><i style="width:{int(p.sure * 100)}%"></i></span>')
+    trend = "trend unknown" if p.trend is None else f"price {p.trend * 100:+.0f}% vs a day ago"
+    body = (f'<details><summary>Why</summary><p>{esc(p.reason)}</p>'
+            f'<p>≈{p.spd:.0f} sold/day (estimate) · {p.listed} listed on the sell AH · {trend}'
+            f' · {p.depth} listed just above your price</p>{sb}</details>'
+            + (f'<details class="bought"><summary>I bought this</summary>{_bought_form(p)}</details>' if form else ""))
     rk = f'<div class="rank">{rank}</div>' if rank else "<div></div>"
     return (f'<div class="pick{unf}"><div class="row">{rk}{_ico(p.icon, p.quality)}'
             f'<div><span class="name {_qcls(p.quality)}">{_name(p.item_id, p.name)}</span>'
@@ -229,6 +225,9 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     ban = []
     if error:
         ban.append(f'<div class="banner err">{esc(error)}</div>')
+    if state["scanning"]:
+        ban.append('<div class="banner">Scanning the auction houses now… This takes a few minutes; '
+                   'the page reloads by itself.</div>')
     if state["gathering"]:
         ban.append('<div class="banner">Gathering price history… Picks can appear after the first scan cycle '
                    '(a few minutes), since the site already keeps price history. Holds need about a day of scans.</div>')
@@ -242,7 +241,8 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     hit = f'{st["hits"]} of {st["judged"]} ({st["hits"] * 100 // st["judged"]}%)' if st["judged"] else "none judged yet"
     last = _hm(state["last_scan"]) if state["last_scan"] else "never"
     return Template((HERE / "page.html").read_text(encoding="utf-8")).substitute(
-        css_href=esc(css_href), banners="".join(ban),
+        css_href=esc(css_href), banners="".join(ban), reload_s=15 if state["scanning"] else 300,
+        refresh_off=" disabled" if state["scanning"] else "",
         sub=f'Alliance · Normal (PvE) · EU — Alliance AH + Blackwater AH — {esc(age)}{esc(nxt)}',
         paper_rate=esc(f'{st["hold_hits"]} of {st["hold_judged"]} ({st["hold_hits"] * 100 // st["hold_judged"]}%)'
                        if st["hold_judged"] else "none judged yet"),
@@ -251,8 +251,7 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
         last_scan=esc(last), hit_rate=esc(hit),
         buy=_rows(p.ranked, "Nothing worth buying right now.", lambda x, n: _pick_row(x, n, dim=True)),
         sell=_rows(state["holdings"], "Nothing held.", lambda x, n: _held_row(x)),
-        paper=_rows(p.paper, "No paper holds.", lambda x, n: _pick_row(x, n)),
-        checks=_rows(p.checks, "Nothing to check.", lambda x, n: _pick_row(x, None, False, True)))
+        paper=_rows(p.paper, "No paper holds.", lambda x, n: _pick_row(x, n)))
 
 
 def _int(text, name, lo, hi) -> int:
@@ -282,11 +281,16 @@ def _bought(conn, f, now):
                    _int(f.get("target"), "Target", 0, 10**12), now, sell_by, sell_at)
 
 
+def _refresh(conn, f, now):
+    path = conn.execute("PRAGMA database_list").fetchone()["file"]
+    threading.Thread(target=scanner.refresh, args=(path,), daemon=True).start()
+
+
 ROUTES = {
     "/gold": lambda c, f, now: db.set_gold(c, parse_gold(f.get("gold", ""))),
     "/bought": _bought,
     "/sold": lambda c, f, now: db.mark_sold(c, _int(f.get("holding_id"), "Holding", 1, 10**12), now),
-    "/vendor-confirm": lambda c, f, now: db.confirm_vendor(c, _int(f.get("item_id"), "Item", 1, 10**9)),
+    "/refresh": _refresh,
 }
 
 

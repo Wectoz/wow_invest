@@ -8,7 +8,7 @@ from datetime import timedelta
 import pytest
 
 from tests.conftest import NOW
-from wow_invest import db
+from wow_invest import db, web
 from wow_invest.models import Pick, Row
 from wow_invest.pricing import undercut
 from wow_invest.web import build_state, fmt_money, make_server, parse_gold, render_page, safe_icon
@@ -280,8 +280,18 @@ def test_bought_then_sold_updates_holdings(server):
     assert req(base + "/bought", {**form, "qty": "0"})[0] == 400
     assert req(base + "/sold", {"holding_id": str(h.id)})[0] == 303
     assert db.open_holdings(c) == []
-    assert req(base + "/vendor-confirm", {"item_id": "7"})[0] == 303
-    assert db.confirmed_vendors(c) == {7}
+
+
+def test_refresh_starts_a_forced_scan_and_the_page_says_so(server, monkeypatch):
+    path, base, port = server
+    seen, done = [], threading.Event()
+    monkeypatch.setattr(web.scanner, "refresh", lambda p: (seen.append(p), done.set()))
+    assert req(base + "/refresh", {})[0] == 303
+    assert done.wait(5) and seen == [path]
+    assert "Scanning the auction houses" not in req(base + "/")[1] and "Refresh picks" in req(base + "/")[1]
+    with web.scanner.busy:
+        html = req(base + "/")[1]
+    assert "Scanning the auction houses" in html and 'content="15;url=/"' in html
 
 
 def raw(port, request: bytes):

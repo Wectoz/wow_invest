@@ -146,13 +146,6 @@ def test_mark_static_bad_excludes_from_missing_static():
     assert r["static_done"] == 1 and r["purchase_price"] == 40 and r["required_level"] == 12
 
 
-def test_confirmed_vendors():
-    c = conn()
-    db.confirm_vendor(c, 4)
-    db.confirm_vendor(c, 4)
-    assert db.confirmed_vendors(c) == {4}
-
-
 def test_latest_scan():
     c = conn()
     assert db.latest_scan(c, "alliance") is None

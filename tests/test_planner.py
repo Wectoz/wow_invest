@@ -79,11 +79,6 @@ def test_proven_holds_capped_at_quarter_including_open_holds():
     assert out.spend == 100 * G
 
 
-def test_vendor_check_never_funded():
-    out = plan([pk("vendor_check")], 10**9, [], True)
-    assert not out.ranked and len(out.checks) == 1 and not out.checks[0].funded
-
-
 def test_holds_proven_thresholds():
     ok = dict(judged=0, hits=0, hold_judged=10, hold_hits=7, hold_items=5, hold_days=3)
     assert holds_proven(ok)
@@ -103,11 +98,6 @@ def test_best_per_item_keeps_highest_score():
 def test_paper_hold_does_not_hide_flip_for_same_item():
     out = plan([pk("hold", 5, score=9.0), pk("flip", 5, score=1.0)], 10**9, [], False)
     assert [p.kind for p in out.ranked] == ["flip"] and not out.paper
-
-
-def test_vendor_check_does_not_hide_flip_for_same_item():
-    out = plan([pk("vendor_check", 5, score=9.0), pk("flip", 5, score=1.0)], 10**9, [], False)
-    assert [p.kind for p in out.ranked] == ["flip"] and not out.checks
 
 
 def test_exhausted_hold_cap_still_funds_later_flips():

@@ -23,7 +23,6 @@ CREATE TABLE IF NOT EXISTS picks(id INTEGER PRIMARY KEY, created_at TEXT, kind T
 CREATE TABLE IF NOT EXISTS holdings(id INTEGER PRIMARY KEY, item_id INTEGER, kind TEXT,
   qty INTEGER, price_paid INTEGER, target INTEGER, bought_at TEXT, sell_by TEXT, sold_at TEXT, sell_at TEXT NOT NULL DEFAULT 'alliance');
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
-CREATE TABLE IF NOT EXISTS vendor_confirmed(item_id INTEGER PRIMARY KEY);
 """
 
 
@@ -168,15 +167,6 @@ def open_holdings(conn) -> list[Holding]:
 def held_units(conn) -> dict[int, int]:
     return {r[0]: r[1] for r in conn.execute(
         "SELECT item_id, sum(qty) FROM holdings WHERE sold_at IS NULL GROUP BY item_id")}
-
-
-def confirm_vendor(conn, item_id):
-    with conn:
-        conn.execute("INSERT OR IGNORE INTO vendor_confirmed VALUES(?)", (item_id,))
-
-
-def confirmed_vendors(conn) -> set[int]:
-    return {r[0] for r in conn.execute("SELECT item_id FROM vendor_confirmed")}
 
 
 def save_candidates(conn, picks: list[Pick], captured_at: str):

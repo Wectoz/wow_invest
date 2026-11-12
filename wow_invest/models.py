@@ -45,7 +45,7 @@ class Detail:
 
 @dataclass(slots=True)
 class Pick:
-    kind: str  # flip | cross | vendor | vendor_check | hold
+    kind: str  # flip | cross | vendor | hold
     item_id: int
     name: str
     icon: str | None
@@ -87,6 +87,5 @@ class Holding:
 class Plan:
     ranked: list[Pick]
     paper: list[Pick]
-    checks: list[Pick]
     spend: int
     profit: int

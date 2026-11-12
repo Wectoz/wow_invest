@@ -1,16 +1,18 @@
 """One scan cycle (lists, static backfill, candidate details, picks) and the loop that repeats it."""
 import logging
+import threading
 from datetime import UTC, datetime, timedelta
 
 from . import config as c
 from . import db, planner, tracker
-from .api import ApiError
+from .api import ApiError, Client
 from .crowd import estimate_crowd, item_band, overlaps
 from .picks import cross_flip, hold, quick_flip, vendor_flip
 from .tables import VENDOR_ITEMS
 
 HOUSES = ("alliance", "blackwater")
 log = logging.getLogger(__name__)
+busy = threading.Lock()  # held while a scan cycle runs
 
 
 class _Outage(Exception):
@@ -22,12 +24,19 @@ def _choose(conn, rows, deal_ids, crowd, now):
     a = {r.item_id: r for r in rows["alliance"] if r.min_ask is not None}
     b = {r.item_id: r for r in rows["blackwater"] if r.min_ask is not None}
     prev = db.rows_at(conn, "alliance", 24, now)
-    vendors = set(VENDOR_ITEMS) | db.confirmed_vendors(conn)
 
-    def cheap_static(r):
+    def vendor_margin(r):
+        """Sales-weighted gap between the ask and the vendor price; None while the price is unknown."""
         s = db.static(conn, r.item_id)
-        return (s is not None and s["static_done"] == 1 and s["purchase_price"] > 0
-                and s["purchase_price"] / (s["purchase_quantity"] or 1) <= r.min_ask / c.VENDOR_CHECK_RATIO)
+        if s is None or s["static_done"] != 1:
+            return None
+        return (r.min_ask - s["purchase_price"] / (s["purchase_quantity"] or 1)) * r.sold_24h
+
+    def vendor_list():
+        sold = [(r, vendor_margin(r)) for i, r in a.items() if i in VENDOR_ITEMS]
+        known = sorted(((r, m) for r, m in sold if m is not None and m > 0), key=lambda x: -x[1])
+        return ([("alliance", r, None) for r, _ in known]
+                + by_sales([("alliance", r, None) for r, m in sold if m is None]))
 
     def flooded(r):
         band, old = item_band(r.item_id, r.required_level), prev.get(r.item_id, (None, 0, 0))[1]
@@ -42,8 +51,7 @@ def _choose(conn, rows, deal_ids, crowd, now):
                            if i in b and b[i].min_ask <= c.BUY_BELOW * r.min_ask]
                           + [("blackwater", r, "alliance") for i, r in b.items()
                              if i in a and a[i].min_ask <= c.BUY_BELOW * r.min_ask]),
-        "vendor": by_sales([("alliance", r, None) for i, r in a.items() if i in vendors])
-        + by_sales([("alliance", r, None) for i, r in a.items() if i not in vendors and cheap_static(r)]),
+        "vendor": vendor_list(),
         "hold": by_sales([("alliance", r, None) for r in a.values() if flooded(r)]),
         "flip": by_sales([("alliance", a[i], None) for i in deal_ids if i in a]),
     }
@@ -57,7 +65,7 @@ def _choose(conn, rows, deal_ids, crowd, now):
     return out
 
 
-def run_cycle(client, conn, now) -> str:
+def run_cycle(client, conn, now, force=False) -> str:
     try:
         times = client.scan_times()
         # a list, not a lazy any(), so both houses are checked: a missing house (KeyError) or a missing,
@@ -65,7 +73,7 @@ def run_cycle(client, conn, now) -> str:
         stale = any([datetime.fromisoformat(times[h][1]) < now - timedelta(hours=c.STALE_HOURS) for h in HOUSES])
     except (ApiError, KeyError, TypeError, ValueError):
         return "error"
-    if all(times[h][0] == db.last_captured(conn, h) for h in HOUSES):
+    if not force and all(times[h][0] == db.last_captured(conn, h) for h in HOUSES):
         return "no-change"
     try:
         rows = {h: client.all_items(h) for h in HOUSES}
@@ -109,7 +117,7 @@ def run_cycle(client, conn, now) -> str:
         db.set_scan_crowd(conn, scan_id["alliance"], crowd)
         db.set_setting(conn, "crowd", f"{crowd[0]}-{crowd[1]}")
 
-        held, confirmed, picks = db.held_units(conn), db.confirmed_vendors(conn), []
+        held, picks = db.held_units(conn), []
         for kind, house, r, buy_house in _choose(conn, rows, deals["alliance"][0], crowd, now):
             sell, h = detail(house, r.item_id), held.get(r.item_id, 0)
             # only a cross buys on another house; the rest buy where they sell
@@ -119,7 +127,7 @@ def run_cycle(client, conn, now) -> str:
             try:
                 new = [cross_flip(r, buy, sell, h, now)] if kind == "cross" else []
                 if house == "alliance":  # every builder that sells on Alliance: never hide a buy
-                    new += [quick_flip(r, sell, h, now), vendor_flip(r, sell, h, confirmed, now),
+                    new += [quick_flip(r, sell, h, now), vendor_flip(r, sell, h, now),
                             hold(r, sell, crowd, h, now)]
             except Exception:
                 log.exception("pick builders failed for item %s", r.item_id)
@@ -143,7 +151,8 @@ def loop(client_factory, db_path, stop):
         try:
             if conn is None:
                 conn = db.connect(db_path)
-            result = run_cycle(client, conn, datetime.now(UTC))
+            with busy:
+                result = run_cycle(client, conn, datetime.now(UTC))
             log.info("scan cycle: %s", result)
         except Exception:
             log.exception("scan cycle failed")
@@ -151,3 +160,20 @@ def loop(client_factory, db_path, stop):
         # back off while things keep failing, so a down site is not polled every few minutes
         wait = min(2 * wait, 60) if result == "error" else c.POLL_MINUTES
         stop.wait(wait * 60)
+
+
+def refresh(db_path, client_factory=Client):
+    """One forced cycle now, rebuilding the picks even if the site has no newer scan. Skipped while
+    a cycle is already running."""
+    if not busy.acquire(blocking=False):
+        return
+    try:
+        conn = db.connect(db_path)
+        try:
+            log.info("refresh: %s", run_cycle(client_factory(), conn, datetime.now(UTC), force=True))
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("refresh failed")
+    finally:
+        busy.release()
