@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from . import config as c
 from . import db, planner, tracker
-from .api import ApiError, Client
+from .api import ApiError, Client, ShapeError
 from .crowd import estimate_crowd, item_band, overlaps
 from .picks import craft_flip, cross_flip, hold, quick_flip, rise, trend, vendor_flip
 from .tables import CRAFT_SKIP, RECIPES, VENDOR_ITEMS, vendor_unit
@@ -18,6 +18,10 @@ log = logging.getLogger(__name__)
 busy = threading.Lock()  # held while a scan cycle runs
 started = 0.0  # time.time() when the running (or last) cycle began
 notify = None  # set by the desktop app: called with a line of text when a strong new pick appears
+
+
+# vendor goods and recipe reagents: their vendor price decides vendor and crafting picks
+_PRICED_FIRST = {i for i, stock in VENDOR_ITEMS.items() if stock is None} | {i for r in RECIPES for i, _ in r[4]}
 
 
 class _Outage(Exception):
@@ -135,14 +139,16 @@ def run_cycle(client, conn, now, force=False) -> str:
         # a list, not a lazy any(), so both houses are checked: a missing house (KeyError) or a missing,
         # malformed or naive auctions_at costs this one request, not both lists
         stale = any([datetime.fromisoformat(times[h][1]) < now - timedelta(hours=c.STALE_HOURS) for h in HOUSES])
-    except (ApiError, KeyError, TypeError, ValueError):
+    except (ApiError, KeyError, TypeError, ValueError) as e:
+        log.warning("scan failed reading the scan times: %r", e)
         return "error"
     if not force and all(times[h][0] == db.last_captured(conn, h) for h in HOUSES):
         return "no-change"
     try:
         rows = {h: client.all_items(h) for h in HOUSES}
         deals = {h: client.deals(h) for h in HOUSES}
-    except ApiError:
+    except ApiError as e:
+        log.warning("scan failed reading the item lists: %s", e)
         return "error"
     cut = {h: deals[h][1] for h in HOUSES}
     scan_id = {h: db.save_scan(conn, h, *times[h], cut[h], rows[h]) for h in HOUSES}
@@ -163,6 +169,8 @@ def run_cycle(client, conn, now, force=False) -> str:
             try:
                 cache[key], errors = client.item_detail(house, item_id, cut[house]), 0
             except ApiError as e:
+                if isinstance(e, ShapeError):  # every other item would fail the same way
+                    raise _Outage from e
                 if e.transient:
                     errors += 1
                     if errors >= c.MAX_ERRORS_IN_ROW:
@@ -172,7 +180,7 @@ def run_cycle(client, conn, now, force=False) -> str:
         return cache[key]
 
     try:
-        for i in db.missing_static(conn, c.STATIC_PER_CYCLE):
+        for i in db.missing_static(conn, c.STATIC_PER_CYCLE, _PRICED_FIRST):
             d = detail("alliance", i, static=True)
             if d is not None:
                 db.save_static(conn, d)
@@ -220,7 +228,8 @@ def run_cycle(client, conn, now, force=False) -> str:
                     picks.append(craft_flip(r, sell, recipe, mats, held.get(r.item_id, 0), now))
                 except Exception:
                     log.exception("craft builder failed for item %s", r.item_id)
-    except _Outage:
+    except _Outage as e:
+        log.warning("scan stopped early: %s", e.__cause__)
         return "error"
 
     picks = sorted((p for p in picks if p), key=lambda p: -p.score)
@@ -249,13 +258,15 @@ def _timed(conn, cycle):
 
 
 def loop(client_factory, db_path, stop):
-    conn, client, wait = None, client_factory(), c.POLL_MINUTES
+    conn, client, wait, result = None, client_factory(), c.POLL_MINUTES, None
     while not stop.is_set():
         try:
             if conn is None:
                 conn = db.connect(db_path)
+            # a cycle that failed after saving its scan would otherwise read as "no-change" until the next scan
+            force = result == "error"
             with busy:
-                result = _timed(conn, lambda: run_cycle(client, conn, datetime.now(UTC)))
+                result = _timed(conn, lambda: run_cycle(client, conn, datetime.now(UTC), force=force))
             log.info("scan cycle: %s", result)
         except Exception:
             log.exception("scan cycle failed")

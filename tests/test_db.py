@@ -141,6 +141,7 @@ def test_mark_static_bad_excludes_from_missing_static():
     db.save_scan(c, "alliance", iso(NOW), iso(NOW), 0.05,
                  [row(1, sold=9), row(2, name="B", sold=50), row(3, name="C", sold=1)])
     assert db.missing_static(c, 10) == [2, 1, 3]
+    assert db.missing_static(c, 2, first={3}) == [3, 2]  # vendor goods and reagents jump the queue
     db.mark_static_bad(c, 2)
     db.save_static(c, Detail(1, "alliance", [], [], 0.05, 40, 1, 20, 12))
     assert db.missing_static(c, 10) == [3]

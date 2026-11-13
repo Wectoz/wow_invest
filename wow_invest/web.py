@@ -110,6 +110,11 @@ def sell_advice(h, current: int | None, cut: float, dep: int, now: datetime) -> 
     return "list", max(undercut(current), h.target)
 
 
+def _last_scan(conn) -> datetime | None:
+    ali = db.latest_scan(conn, "alliance")
+    return _aware(db.candidates_at(conn)) or (_aware(ali["captured_at"]) if ali else None)
+
+
 def build_state(conn, now: datetime) -> dict:
     cands, captured = db.load_candidates(conn)
     holdings = db.open_holdings(conn)
@@ -146,7 +151,7 @@ def build_state(conn, now: datetime) -> dict:
     p = plan(fresh, db.get_gold(conn), holdings, holds_proven(stats), floor, unit_floor)
     oldest = conn.execute("SELECT min(captured_at) FROM scans WHERE house='alliance'").fetchone()[0]
     history_ok = bool(oldest) and now - _aware(oldest) >= timedelta(hours=C.MIN_HISTORY_HOURS)
-    last_ok = _aware(captured) or (_aware(ali["captured_at"]) if ali else None)
+    last_ok = _last_scan(conn)
     auctions = _aware(ali["auctions_at"]) if ali else None
     return {
         "gold": db.get_gold(conn), "plan": p, "holdings": held, "stats": stats,
@@ -157,6 +162,8 @@ def build_state(conn, now: datetime) -> dict:
         "professions": chosen, "type": kind,
         # the same picks without the profit limits, and without the item type filter as well: what each hides
         "loose": plan(fresh, 0, holdings, holds_proven(stats), 0, 0, top=len(cands)),
+        # with the profit limits but without the length cap, so the cap is not counted as a limit
+        "floored": plan(fresh, 0, holdings, holds_proven(stats), floor, unit_floor, top=len(cands)),
         "untyped": plan(untyped, 0, holdings, holds_proven(stats), 0, 0, top=len(cands)), "min_profit": floor, "min_unit": unit_floor, "hidden": len(hidden), "sort": db.get_setting(conn, "sort", "return"),
         "drift": db.get_setting(conn, "drift"), "real": db.real_results(conn, ali["cut"] if ali else 0.05), "skills": json.loads(db.get_setting(conn, "skills", "{}")),
         "rep": json.loads(db.get_setting(conn, "rep", C.REP_DEFAULT)),
@@ -313,7 +320,7 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
 
     shown = sorted(in_tab(tab), key=SORTS[sort][1])
     # counted for the open tab, so an empty tab says what emptied it
-    by_floor = len(in_tab(tab, state["loose"])) - len(shown)
+    by_floor = len(in_tab(tab, state["loose"])) - len(in_tab(tab, state["floored"]))
     by_type = len(in_tab(tab, state["untyped"])) - len(in_tab(tab, state["loose"]))
     funded_kinds = {x.kind for x in p.ranked}
     sorts = "".join(f'<button name="sort" value="{k}"{" class=\"on\"" if k == sort else ""}>{esc(v[0])}</button>'
@@ -532,7 +539,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/version":
             conn = db.connect(self.server.db_path)
             try:
-                self._send(200, _version(build_state(conn, datetime.now(UTC))))
+                self._send(200, _version({"last_scan": _last_scan(conn), "scanning": scanner.busy.locked()}))
             finally:
                 conn.close()
         elif path == "/static/style.css":
@@ -574,6 +581,9 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        log.exception("page request failed")  # the desktop app has no console for the default traceback
 
 
 def make_server(db_path: str, port: int) -> ThreadingHTTPServer:

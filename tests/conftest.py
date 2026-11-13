@@ -9,7 +9,7 @@ NOW = datetime(2026, 11, 11, 12, tzinfo=UTC)
 
 
 def pts(spec):
-    """Build Points from (hours_ago, units, min_ask, partial, early[, new_units]) tuples."""
+    """Build Points from (hours_ago, units, min_ask, confirmed sold, possibly sold) tuples."""
     return [Point(NOW - timedelta(hours=t[0]), *t[1:]) for t in spec]
 
 

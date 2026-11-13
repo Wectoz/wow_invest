@@ -35,7 +35,7 @@ def client(*items, times=None):
 def test_parse_row_keeps_nulls_and_rounds_prices():
     r = parse_row({"id": 990001, "name": None, "icon": None, "quality": None, "class_name": None, "subclass_name": None,
                    "required_level": None, "item_level": None, "minimum_ask_copper": 1800000.0, "average_ask_copper": 1800000.4,
-                   "units": 2, "listings": 2, "sold_24h": 6, "vendor_sell_copper": None})
+                   "units": 2, "listings": 2, "early_removed_24h": 6, "vendor_sell_copper": None})
     assert (r.name, r.min_ask, r.avg_ask, r.required_level) == (None, 1800000, 1800000, None)
 
 
@@ -43,13 +43,13 @@ def test_parse_detail_sorts_ladder_and_zeroes_null_counts():
     d = parse_detail({"item": {"id": 5, "purchase_price": 2000, "purchase_quantity": 1, "sell_price": 500, "required_level": 0},
                       "ladder": [{"units": 3, "unit_price_copper": 200.0}, {"units": 1, "unit_price_copper": 100.0}],
                       "series": [{"captured_at": "2026-11-08T20:13:51.301379+00:00", "units": 4, "minimum_ask_copper": None,
-                                  "partial_fills": None, "early_disappearances": None, "new_units": None},
+                                  "confirmed": None, "possible": None},
                                  {"captured_at": "2026-11-08T21:13:51+00:00", "units": 4, "minimum_ask_copper": 9.0,
-                                  "partial_fills": 1, "early_disappearances": 8, "new_units": 7}]}, "alliance", 0.05)
+                                  "confirmed": 1, "possible": 8}]}, "alliance", 0.05)
     assert d.ladder == [(100, 1), (200, 3)]
     p = d.series[0]
-    assert (p.partial_fills, p.early, p.new_units, p.min_ask, p.at.utcoffset().total_seconds()) == (0, 0, 0, None, 0)
-    assert (d.series[1].early, d.series[1].new_units) == (8, 7)
+    assert (p.partial_fills, p.early, p.min_ask, p.at.utcoffset().total_seconds()) == (0, 0, None, 0)
+    assert (d.series[1].partial_fills, d.series[1].early) == (1, 8)
     assert (d.cut, d.house, d.purchase_price) == (0.05, "alliance", 2000)
 
 
@@ -93,7 +93,7 @@ def test_get_json_5xx_after_retries_is_transient():
 
 
 def test_all_items_pages_until_total():
-    row = {"id": 1, "units": 1, "listings": 1, "sold_24h": 0}
+    row = {"id": 1, "units": 1, "listings": 1, "early_removed_24h": 0}
     c, f, _ = client({"items": [row] * 200, "total": 450}, {"items": [row] * 200, "total": 450},
                      {"items": [row] * 50, "total": 450})
     assert len(c.all_items("alliance")) == 450
@@ -150,15 +150,25 @@ def test_item_detail_bad_timestamp_is_api_error():
 
 def test_row_the_site_has_no_data_for_gets_its_name_class_and_level_from_the_item_table():
     from wow_invest.api import parse_row
-    r = parse_row({"id": 13046, "name": None, "class_name": None, "required_level": None, "units": 1})
+    r = parse_row({"id": 13046, "name": None, "class_name": None, "required_level": None, "units": 1, "early_removed_24h": 0})
     assert (r.name, r.class_name, r.required_level) == ("Blanchard's Stout", "Weapon", 45)
-    r = parse_row({"id": 13046, "name": "Site Name", "class_name": "Armor", "required_level": 0})
+    r = parse_row({"id": 13046, "name": "Site Name", "class_name": "Armor", "required_level": 0, "early_removed_24h": 0})
     assert (r.name, r.class_name, r.required_level) == ("Site Name", "Armor", 0)  # the site's own data wins
 
 
 def test_parse_row_fills_icon_and_quality_the_site_lacks():
-    r = parse_row({"id": 15216, "name": None, "icon": None, "quality": None, "minimum_ask_copper": 1.0})
+    r = parse_row({"id": 15216, "name": None, "icon": None, "quality": None, "minimum_ask_copper": 1.0, "early_removed_24h": 0})
     assert (r.name, r.icon, r.quality) == (
         "Rune Sword", "https://render.worldofwarcraft.com/forever-eu/icons/56/135351.jpg", "UNCOMMON")
-    r = parse_row({"id": 15216, "name": "x", "icon": "site-icon", "quality": "RARE", "minimum_ask_copper": 1.0})
+    r = parse_row({"id": 15216, "name": "x", "icon": "site-icon", "quality": "RARE", "minimum_ask_copper": 1.0, "early_removed_24h": 0})
     assert (r.icon, r.quality) == ("site-icon", "RARE")  # the site's own values win
+
+
+def test_a_renamed_sales_field_fails_the_scan_instead_of_reading_as_zero():
+    from wow_invest.api import ShapeError
+    c, _, _ = client({"items": [{"id": 1, "units": 1, "sold_24h": 5}], "total": 1})
+    with pytest.raises(ShapeError):
+        c.all_items("alliance")
+    with pytest.raises(KeyError):
+        parse_detail({"item": {"id": 5}, "series": [{"captured_at": "2026-11-08T21:13:51+00:00", "partial_fills": 1}]},
+                     "alliance", 0.05)

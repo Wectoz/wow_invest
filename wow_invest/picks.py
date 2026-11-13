@@ -236,6 +236,9 @@ def craft_flip(row, d, recipe, mats, held, now):
         return None
     p.profession = prof
     crafts = math.ceil(p.qty / made)
+    full = sum(price * units for price, units in ladder[:crafts])  # a craft cannot be made in part
+    p.cost, p.profit = full, p.profit - (full - p.cost)
+    p.score = score(p.profit, p.cost, p.days)
     need = ", ".join(f"{crafts * n}× {name} ({'vendor' if vend else 'AH'})" for name, n, _, vend in mats)
     p.reason = (f"Craft {crafts}× with {prof} (skill {skill}): {need}. Materials up to {_money(p.max_unit_price)}"
                 f" a piece, it goes for {_money(going)} on {d.house.title()}" + p.reason)

@@ -128,13 +128,14 @@ def recent_medians(conn, house, now, hours=24) -> dict[int, float]:
     return {i: median(v) for i, v in asks.items() if len(v) >= 2}
 
 
-def missing_static(conn, limit: int) -> list[int]:
-    return [r[0] for r in conn.execute(
+def missing_static(conn, limit: int, first=frozenset()) -> list[int]:
+    """Items without vendor data yet: those in `first`, then the best sellers."""
+    ids = [r[0] for r in conn.execute(
         """SELECT i.item_id FROM items i
            LEFT JOIN snapshots s ON s.item_id = i.item_id AND s.scan_id =
              (SELECT max(scan_id) FROM snapshots WHERE item_id = i.item_id)
-           WHERE i.static_done = 0 ORDER BY coalesce(s.sold_24h, 0) DESC, i.item_id LIMIT ?""",
-        (limit,))]
+           WHERE i.static_done = 0 ORDER BY coalesce(s.sold_24h, 0) DESC, i.item_id""")]
+    return sorted(ids, key=lambda i: i not in first)[:limit]  # stable: keeps the sales order within each group
 
 
 def save_static(conn, d: Detail):
@@ -225,6 +226,12 @@ def load_candidates(conn) -> tuple[list[Pick], str | None]:
                 for p in d["picks"]], d["captured_at"]
     except (KeyError, TypeError, ValueError):
         return [], None
+
+
+def candidates_at(conn) -> str | None:
+    """When the saved picks were built, without loading them."""
+    r = conn.execute("SELECT json_extract(value, '$.captured_at') FROM settings WHERE key='candidates'").fetchone()
+    return r[0] if r else None
 
 
 def record_picks(conn, picks: list[Pick], now) -> int:

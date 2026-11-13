@@ -1,4 +1,5 @@
 """Polite HTTP client for the blackwater.exchange JSON API, plus JSON -> models parsers."""
+import http.client
 import json
 import time
 import urllib.error
@@ -14,6 +15,10 @@ class ApiError(Exception):
     def __init__(self, msg="", transient=True):
         super().__init__(msg)
         self.transient = transient  # False: retrying will not help (4xx, wrong shape)
+
+
+class ShapeError(ApiError):
+    """The site answered, but not in the shape we read: its format changed."""
 
 
 def _fetch(url, headers):
@@ -34,7 +39,7 @@ def parse_row(d):
         required_level=d.get("required_level") if d.get("required_level") is not None else level,
         item_level=d.get("item_level"),
         min_ask=_int(d.get("minimum_ask_copper")), avg_ask=_int(d.get("average_ask_copper")),
-        units=d.get("units") or 0, listings=d.get("listings") or 0, sold_24h=d.get("sold_24h") or 0,
+        units=d.get("units") or 0, listings=d.get("listings") or 0, sold_24h=d["early_removed_24h"] or 0,
         vendor_sell=_int(d.get("vendor_sell_copper")),
     )
 
@@ -44,8 +49,7 @@ def parse_detail(d, house, cut):
     ladder = sorted((round(x["unit_price_copper"]), x.get("units") or 0) for x in d.get("ladder") or []
                     if x.get("unit_price_copper") is not None)
     series = [Point(at=datetime.fromisoformat(s["captured_at"]), units=s.get("units") or 0,
-                    min_ask=_int(s.get("minimum_ask_copper")), partial_fills=s.get("partial_fills") or 0,
-                    early=s.get("early_disappearances") or 0, new_units=s.get("new_units") or 0)
+                    min_ask=_int(s.get("minimum_ask_copper")), partial_fills=s["confirmed"] or 0, early=s["possible"] or 0)
               for s in d.get("series") or []]
     return Detail(item_id=it["id"], house=house, ladder=ladder, series=series, cut=cut,
                   purchase_price=it.get("purchase_price") or 0, purchase_quantity=it.get("purchase_quantity") or 1,
@@ -58,7 +62,7 @@ def _shaped(fn):
         try:
             return fn(self, *a, **k)
         except (KeyError, TypeError, ValueError, AttributeError) as e:
-            raise ApiError(f"unexpected response in {fn.__name__}{a}: {e!r}", transient=False) from e
+            raise ShapeError(f"unexpected response in {fn.__name__}{a}: {e!r}", transient=False) from e
     return wrap
 
 
@@ -85,7 +89,7 @@ class Client:
                 ra = e.headers.get("Retry-After") if e.headers else None
                 retry_after = min(int(ra), config.RETRY_AFTER_MAX_S) if ra and ra.isdigit() else None
                 err = e
-            except (urllib.error.URLError, ValueError, OSError) as e:  # ValueError covers bad JSON
+            except (urllib.error.URLError, ValueError, OSError, http.client.HTTPException) as e:  # ValueError covers bad JSON
                 self._last = self._clock()
                 err = e
             if delay is None:

@@ -289,7 +289,7 @@ class FakeStop:
 
 def test_loop_doubles_wait_after_errors_up_to_an_hour_and_resets(monkeypatch, tmp_path):
     results = iter(["error", "error", "error", "error", "error", "no-change", "error", "done"])
-    monkeypatch.setattr(scanner, "run_cycle", lambda client, conn, now: next(results))
+    monkeypatch.setattr(scanner, "run_cycle", lambda client, conn, now, force=False: next(results))
     stop = FakeStop(8)
     scanner.loop(lambda: "client", str(tmp_path / "w.db"), stop)
     assert stop.waits == [m * 60 for m in (10, 20, 40, 60, 60, 5, 10, 5)]
@@ -305,7 +305,7 @@ def test_loop_retries_db_connect_after_the_wait(monkeypatch, tmp_path, caplog):
         return real(path)
 
     monkeypatch.setattr(db, "connect", connect)
-    monkeypatch.setattr(scanner, "run_cycle", lambda client, conn, now: "done")
+    monkeypatch.setattr(scanner, "run_cycle", lambda client, conn, now, force=False: "done")
     stop = FakeStop(3)
     scanner.loop(lambda: "client", str(tmp_path / "w.db"), stop)
     assert len(tries) == 2  # failed once, then connected and kept the connection
@@ -316,7 +316,7 @@ def test_loop_logs_errors_and_keeps_going(monkeypatch, tmp_path, caplog):
     caplog.set_level(logging.INFO)
     stop, seen, made = threading.Event(), [], []
 
-    def cycle(client, conn, now):
+    def cycle(client, conn, now, force=False):
         seen.append(client)
         if len(seen) == 1:
             raise RuntimeError("boom")

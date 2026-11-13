@@ -29,7 +29,7 @@ def _toast(text: str):
     """A Windows tray balloon, through PowerShell so no extra package is needed."""
     text = "".join(ch for ch in text if ch.isalnum() or ch in " +,.:-")  # nothing that could end the quoted string
     script = ("Add-Type -AssemblyName System.Windows.Forms; $n = New-Object System.Windows.Forms.NotifyIcon; "
-              f"$n.Icon = New-Object System.Drawing.Icon('{ICON}'); $n.Visible = $true; "
+              f"$n.Icon = New-Object System.Drawing.Icon('{str(ICON).replace("'", "''")}'); $n.Visible = $true; "
               f"$n.ShowBalloonTip(10000, 'WoW Invest', '{text}', 'None'); Start-Sleep 10; $n.Dispose()")
     try:
         subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],

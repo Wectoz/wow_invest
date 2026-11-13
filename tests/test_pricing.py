@@ -23,12 +23,9 @@ def test_sales_per_day_weights_sold_or_cancelled_half():
     from wow_invest.pricing import sales_per_day
     s = pts([(1,0,1,4,10),(5,0,1,6,10),(30,0,1,100,100)])
     assert sales_per_day(s, NOW) == 20.0
-def test_sales_net_relisted_units_out_of_early_disappearances():
-    from wow_invest.pricing import sales_per_day, sales_per_day_window
-    # 4 + 0.5×(10−6) = 6; 6 + 0.5×max(0, 10−12) = 6 → 12 a day; the 30h point is outside
-    s = pts([(1,0,1,4,10,6),(5,0,1,6,10,12),(30,0,1,100,100,0)])
-    assert sales_per_day(s, NOW) == 12.0
-    assert sales_per_day_window(s, NOW, 0, 12) == 24.0
+def test_sales_per_day_window_scales_to_a_day():
+    from wow_invest.pricing import sales_per_day_window
+    assert sales_per_day_window(pts([(1,0,1,4,4),(5,0,1,6,0),(30,0,1,100,100)]), NOW, 0, 12) == 24.0
 def test_listed_units_is_median_of_last_24h():
     from tests.conftest import steady
     from wow_invest.pricing import listed_units

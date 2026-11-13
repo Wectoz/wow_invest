@@ -463,6 +463,9 @@ def test_page_says_how_many_picks_the_profit_limits_hide(server):
     assert req(base + "/min-profit", {"min_profit": "50g"})[0] == 303
     assert "1 more picks are hidden by the two profit limits" in req(base + "/")[1]
     assert "more picks are hidden" not in req(base + "/?tab=vendor")[1]  # counted per tab: both are flips
+    assert req(base + "/min-profit", {"min_profit": "1g"})[0] == 303
+    db.save_candidates(c, [replace(mkpick(i, f"p{i}"), profit=900000) for i in range(1, 21)], NOW.isoformat())
+    assert "more picks are hidden" not in req(base + "/")[1]  # the list is cut at its length cap, not by a limit
 
 
 def test_page_says_how_many_picks_the_type_filter_hides():

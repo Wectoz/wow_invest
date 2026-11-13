@@ -100,9 +100,9 @@ def test_hold_never_buys_above_net_proceeds_of_its_target():
 
 def test_churn_on_a_small_house_is_not_a_pick():
     # Strange Dust on Blackwater, first live run: 1645 bought against 734 listed. Each hour 10 likely
-    # sold, 89 gone early, 71 new: ≈ 10 + 0.5 × 18 = 19 an hour = 456 a day (1308 before netting).
+    # sold, 18 possibly sold: 10 + 0.5 × 18 = 19 an hour = 456 a day (1308 before netting).
     # Listed units creep up 2 an hour; the price drifts from 150 to 139 (−6%, so the trend check passes).
-    s = pts([(h, 740 - 2 * h, 139 + h // 4, 10, 89, 71) for h in range(48)])
+    s = pts([(h, 740 - 2 * h, 139 + h // 4, 10, 18) for h in range(48)])
     sell = detail(series=s, ladder=[(139, 300), (145, 440)], cut=0.15, house="blackwater")
     buy = detail(series=[], ladder=[(75, 300), (80, 400), (89, 1000)])
     p = cross_flip(row(item_id=10940, vendor_sell=1), buy, sell, held=0, now=NOW)
@@ -114,8 +114,8 @@ def test_churn_on_a_small_house_is_not_a_pick():
 
 
 def test_high_churn_with_real_fills_is_capped_at_a_quarter_of_listed():
-    # 50 likely sold + 0.5 × (200 − 180) = 60 an hour = 1440 a day → sales cap 1800, but only 400 listed
-    s = pts([(h, 400, 20000, 50, 200, 180) for h in range(48)])
+    # 50 sold + 0.5 × 20 possibly sold = 60 an hour = 1440 a day → sales cap 1800, but only 400 listed
+    s = pts([(h, 400, 20000, 50, 20) for h in range(48)])
     buy = detail(series=[], ladder=[(12000, 500)], cut=0.15, house="blackwater")
     p = cross_flip(row(), buy, detail(series=s, ladder=[(19900, 400)]), held=0, now=NOW)
     # int(19899 × 100 × 0.95) = 1890405 − 1200000
@@ -124,7 +124,7 @@ def test_high_churn_with_real_fills_is_capped_at_a_quarter_of_listed():
 
 def test_supply_cap_counts_units_already_held():
     # same market: a quarter of 400 listed is 100; holding 60 leaves room for 40, holding 100 for none
-    s = pts([(h, 400, 20000, 50, 200, 180) for h in range(48)])
+    s = pts([(h, 400, 20000, 50, 20) for h in range(48)])
     buy = detail(series=[], ladder=[(12000, 500)], cut=0.15, house="blackwater")
     sell = detail(series=s, ladder=[(19900, 400)])
     p = cross_flip(row(), buy, sell, held=60, now=NOW)
@@ -213,6 +213,14 @@ def test_craft_flip_buys_reagents_while_each_piece_still_pays():
     assert "≈48 sold/day (estimate)" in p.reason
     dear = [("Bolt", 2, [(9000, 100)], False)]
     assert craft_flip(row(), detail(ladder=[(19900, 100)]), recipe, dear, held=0, now=NOW) is None
+
+
+def test_craft_flip_pays_for_whole_crafts():
+    recipe = (1, "Tailoring", 125, 2, ((8, 1),))  # one thread makes two
+    mats = [("Thread", 1, [(500, 10**9)], True)]
+    p = craft_flip(row(), detail(ladder=[(19900, 100)]), recipe, mats, held=1, now=NOW)
+    # room for 59 pieces takes 30 crafts: 30 threads, not 29.5
+    assert (p.qty, p.cost) == (59, 15000) and p.reason.startswith("Craft 30× with Tailoring")
 
 
 def test_underpriced_lot_is_a_flip_even_while_the_price_falls():
