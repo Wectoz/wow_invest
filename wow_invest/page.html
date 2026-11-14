@@ -8,10 +8,9 @@
 </head><body><main data-v="$version">
 $banners
 <div class="frame">
-  <header class="brand"><span class="orn"></span><img src="/static/icon.svg" alt="" width="72" height="72">
-    <div><h1>WoW Invest</h1><p>Auction House Planner</p></div><span class="orn"></span></header>
-  <div class="top"><div class="sub">$sub</div>
-    <form method="post" action="/refresh"><button$refresh_off>Refresh picks</button></form></div>
+  <header class="brand"><img src="/static/icon.svg" alt="" width="28" height="28"><h1>WoW Invest</h1>
+    <div class="sub">$sub</div>
+    <form method="post" action="/refresh"><button$refresh_off>Refresh picks</button></form></header>
   <div class="stats">
     <div class="stat"><div class="k">Your gold</div><div class="v">
       <form class="goldform" method="post" action="/gold"><input type="text" name="gold" value="$gold_text" aria-label="Your gold"><button>Set</button></form></div></div>
