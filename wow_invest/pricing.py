@@ -65,6 +65,29 @@ def history_hours(series, now) -> float:
     return max(ages) if ages else 0.0
 
 
+def held_price(series, now) -> int | None:
+    """The cheapest ask the item met or beat BUYOUT_HELD_SHARE of its whole history: a price it holds."""
+    v = sorted(p.min_ask for p in series if p.min_ask is not None and _age_h(p, now) >= 0)
+    return v[int((1 - c.BUYOUT_HELD_SHARE) * len(v))] if v else None
+
+
+def failed_resets(series, now) -> int:
+    """Earlier buyouts that did not hold: the cheapest ask jumped BUYOUT_SPIKE over the median of the
+    day before, then fell back under the midpoint within a day."""
+    pts = sorted((p for p in series if p.min_ask is not None and _age_h(p, now) >= 0), key=lambda p: p.at)
+    n, last = 0, None
+    for i, p in enumerate(pts):
+        before = [q.min_ask for q in pts[:i] if (p.at - q.at).total_seconds() <= 86400]
+        if not before or p.min_ask < c.BUYOUT_SPIKE * median(before):
+            continue
+        if last is not None and (p.at - last).total_seconds() <= 86400:
+            continue  # still the same jump
+        last = p.at
+        after = [q.min_ask for q in pts[i + 1:] if (q.at - p.at).total_seconds() <= 86400]
+        n += bool(after) and min(after) <= (median(before) + p.min_ask) / 2
+    return n
+
+
 def undercut(price: int) -> int:
     return max(1, price - 1)
 

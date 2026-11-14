@@ -262,7 +262,7 @@ def judge_pick(conn, pick_id, hit: bool, now):
 
 def hit_stats(conn) -> dict:
     j, h = conn.execute("SELECT count(*), coalesce(sum(hit),0) FROM picks "
-                        "WHERE kind NOT IN ('rise', 'trend') AND judged_at IS NOT NULL").fetchone()
+                        "WHERE kind NOT IN ('rise', 'trend', 'buyout') AND judged_at IS NOT NULL").fetchone()
     hold = conn.execute(
         """SELECT count(*), coalesce(sum(hit),0), count(DISTINCT item_id),
                   count(DISTINCT substr(created_at,1,10)) FROM (
@@ -270,7 +270,9 @@ def hit_stats(conn) -> dict:
              ORDER BY judged_at DESC, id DESC LIMIT ?)""", (PROVEN_RECENT,)).fetchone()
     rj, rh = conn.execute("SELECT count(*), coalesce(sum(hit),0) FROM picks "
                           "WHERE kind IN ('rise', 'trend') AND judged_at IS NOT NULL").fetchone()
-    return {"judged": j, "hits": h, "rise_judged": rj, "rise_hits": rh, "hold_judged": hold[0], "hold_hits": hold[1],
+    bj, bh = conn.execute("SELECT count(*), coalesce(sum(hit),0) FROM picks "
+                          "WHERE kind = 'buyout' AND judged_at IS NOT NULL").fetchone()
+    return {"judged": j, "hits": h, "rise_judged": rj, "rise_hits": rh, "buyout_judged": bj, "buyout_hits": bh, "hold_judged": hold[0], "hold_hits": hold[1],
             "hold_items": hold[2], "hold_days": hold[3]}
 
 

@@ -48,12 +48,17 @@ STATIC_PER_CYCLE = 60
 REP_CITIES = {"S": "Stormwind", "I": "Ironforge", "D": "Darnassus", "G": "Gnomeregan Exiles"}
 REP_DISCOUNT = {"Friendly": 0.05, "Honored": 0.10, "Revered": 0.15, "Exalted": 0.20}
 REP_DEFAULT = '{"S": "Revered"}'  # until the player sets their own standings
-DETAIL_QUOTAS = {"flip": 400, "cross": 40, "vendor": 40, "hold": 30, "rise": 25, "trend": 30, "slow": 60}
+DETAIL_QUOTAS = {"flip": 400, "cross": 40, "vendor": 40, "hold": 30, "rise": 25, "trend": 30, "buyout": 40, "slow": 60}
+# buyout: take the whole cheap shelf and relist at the price the item usually holds
+BUYOUT_MIN_HISTORY_H = 72  # judge a buyout on three days of prices at least
+BUYOUT_HELD_SHARE = 0.70  # the relist price must have been met or beaten this share of that time
+BUYOUT_DAYS = 3  # buy no more than should resell within this long
+BUYOUT_SPIKE = 1.5  # a jump this far over the day before is someone's earlier buyout
 MAX_ERRORS_IN_ROW = 3
 JUDGE_RUN = 3
 PROVEN_RECENT = 20
 PROVEN_MIN_ITEMS = 5
 PROVEN_MIN_DAYS = 3
-# Fraction of vendor sell price per unit for a 24h listing.
+# Fraction of vendor sell price per unit for a 24h listing. A sale returns it; an unsold listing loses it.
 # shortcut: classic-style guess, verify by listing one item in game
 DEPOSIT_RATE = {"alliance": 0.15, "blackwater": 0.75}

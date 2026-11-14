@@ -42,7 +42,7 @@ def plan(candidates: list[Pick], gold: int, holdings: list[Holding], proven: boo
     min_profit = C.MIN_PROFIT if min_profit is None else min_profit
     min_unit = C.MIN_UNIT_PROFIT if min_unit is None else min_unit
     cands = [p for p in candidates if p.profit >= min_profit and p.profit >= min_unit * p.qty]
-    is_paper = lambda p: p.kind in ("rise", "trend") or (p.kind == "hold" and not proven)  # bets are never funded
+    is_paper = lambda p: p.kind in ("rise", "trend", "buyout") or (p.kind == "hold" and not proven)  # bets are never funded
     pool = best_per_item([p for p in cands if not is_paper(p)])
     # kept apart from the buys, so a multi-day bet on an item never hides (or is hidden by) a flip of it
     paper = best_per_item([p for p in cands if is_paper(p)])

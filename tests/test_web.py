@@ -494,3 +494,10 @@ def test_city_reputations_are_saved_from_the_vendor_tab(server):
     assert req(base + "/rep", {"S": "Exalted", "I": "", "D": "junk"})[0] == 303
     assert db.get_setting(db.connect(path), "rep") == '{"S": "Exalted"}'
     assert "<option selected>Exalted</option>" in req(base + "/?tab=vendor")[1]
+
+
+def test_buyouts_have_their_own_tab():
+    c = seed(":memory:", [mkpick(2, kind="buyout", funded=False)])
+    h = state_html(c, tab="buyout")
+    assert "Linen Cloth" in h and "Buyouts <span>1</span>" in h and "Investments <span>0</span>" in h
+    assert "whole cheap shelf" in h and "Linen Cloth" not in state_html(c, tab="invest")

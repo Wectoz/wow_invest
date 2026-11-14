@@ -10,7 +10,7 @@ from . import config as c
 from . import db, planner, tracker
 from .api import ApiError, Client, ShapeError
 from .crowd import estimate_crowd, item_band, overlaps
-from .picks import craft_flip, cross_flip, hold, quick_flip, rise, trend, vendor_flip
+from .picks import buyout, craft_flip, cross_flip, hold, quick_flip, rise, trend, vendor_flip
 from .tables import CRAFT_SKIP, RECIPES, VENDOR_ITEMS, vendor_unit
 
 HOUSES = c.SCAN_HOUSES
@@ -66,7 +66,11 @@ def _choose(conn, rows, deal_ids, crowd, now):
     def by_sales(xs):
         return sorted(xs, key=lambda x: -x[1].sold_24h)
 
-    lists = {  # dedupe order: cross, vendor, hold, flip, rise, trend, slow
+    week = db.recent_medians(conn, "alliance", now, hours=24 * 7)
+    cheap = sorted((i for i, r in a.items() if i in week and r.min_ask <= c.BUY_BELOW * week[i]),
+                   key=lambda i: -(week[i] - a[i].min_ask) * a[i].sold_24h)
+
+    lists = {  # dedupe order: cross, vendor, hold, flip, rise, trend, buyout, slow
         "cross": by_sales([("alliance", r, "blackwater") for i, r in a.items()
                            if i in b and b[i].min_ask <= c.BUY_BELOW * r.min_ask]
                           + [("blackwater", r, "alliance") for i, r in b.items()
@@ -77,6 +81,8 @@ def _choose(conn, rows, deal_ids, crowd, now):
         + by_sales([("alliance", a[i], None) for i in deal_ids if i in a and i not in drops]),
         "rise": by_sales([("alliance", r, None) for r in a.values() if _behind(r, crowd)]),
         "trend": by_sales([("alliance", r, None) for r in a.values() if climbing(r)]),
+        # cheapest listing well under the item's price of the last week: a shelf worth buying out
+        "buyout": [("alliance", a[i], None) for i in cheap],
         # slow sellers (gear, recipes, dear items) fail the sales floor below: take the ones with the most
         # gold between their cheapest listing and their own price
         "slow": sorted([("alliance", a[i], None) for i in drops if a[i].sold_24h >= 2],
@@ -205,7 +211,7 @@ def run_cycle(client, conn, now, force=False) -> str:
                 if house == "alliance":  # every builder that sells on Alliance: never hide a buy
                     new += [quick_flip(r, sell, h, now), vendor_flip(r, sell, h, now, _rep(conn)),
                             hold(r, sell, crowd, h, now), rise(r, sell, _behind(r, crowd), h, now),
-                            trend(r, sell, h, now)]
+                            trend(r, sell, h, now), buyout(r, sell, h, now)]
             except Exception:
                 log.exception("pick builders failed for item %s", r.item_id)
                 continue

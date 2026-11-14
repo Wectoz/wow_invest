@@ -1,12 +1,12 @@
-"""Candidate builders for the four kinds of pick. When unsure, they return None (no pick)."""
+"""Candidate builders for each kind of pick. When unsure, they return None (no pick)."""
 import math
 from datetime import timedelta
 
 from . import config as c
 from .crowd import item_band, overlaps
 from .models import Pick
-from .pricing import (change, days_to_sell, deposit, going_price, history_hours, ladder_buy,
-                      listed_units, max_units, net_proceeds, sales_per_day, sales_per_day_window,
+from .pricing import (change, days_to_sell, deposit, failed_resets, going_price, held_price, history_hours,
+                      ladder_buy, listed_units, max_units, net_proceeds, sales_per_day, sales_per_day_window,
                       score, sureness, undercut, window_median)
 from .tables import GATHER_BANDS, VENDOR_ITEMS, vendor_deal, vendor_unit
 
@@ -55,9 +55,16 @@ def _build(kind, row, sell, held, now, buy_at, why, going=0, ladder=None, limit=
     listed = listed_units(s, now)
     if slow:
         cap = max(0, max(1, math.floor(spd * c.CAPTURE_SHARE * c.SLOW_DAYS)) - held)
+    elif kind == "buyout":  # the whole shelf, as far as it resells in time: no share-of-listed cap
+        cap = max(0, math.floor(spd * c.CAPTURE_SHARE * c.BUYOUT_DAYS) - held)
     else:  # what the sell house can absorb, counting what we already hold of it
         cap = min(max_units(spd, held), max(0, math.floor(c.SUPPLY_SHARE * listed) - held))
     dep = deposit(row.vendor_sell, sell.house)
+
+    def lost(qty):
+        """Deposit lost per unit: a sale returns it, so only what is still unsold when a 24h listing runs out
+        pays again. Selling evenly over `days`, a unit is relisted (days - 1) / 2 times on average."""
+        return round(dep * max(0, days_to_sell(qty, spd) - 1) / 2)
 
     def price(left):
         return target if target is not None else undercut(min(going, left[0][0]) if left else going)
@@ -68,15 +75,15 @@ def _build(kind, row, sell, held, now, buy_at, why, going=0, ladder=None, limit=
         while True:  # no unit may cost more than it nets; buying less can lower our own list price, so repeat
             qty, cost, top = ladder_buy(ladder, limit, cap)
             left = _left(sell.ladder, qty) if buy_at == sell.house else sell.ladder
-            net = int(price(left) * (1 - sell.cut)) - dep
+            net = int(price(left) * (1 - sell.cut)) - lost(qty)
             if qty == 0 or top <= net:
                 break
             limit = net
     if qty == 0:
         return None
     target = price(left)
-    profit = net_proceeds(target, qty, sell.cut, dep) - cost
-    wait = {"hold": c.HOLD_DAYS, "rise": c.RISE_DAYS, "trend": c.INVEST_DAYS}.get(kind)
+    profit = net_proceeds(target, qty, sell.cut, lost(qty)) - cost
+    wait = {"hold": c.HOLD_DAYS, "rise": c.RISE_DAYS, "trend": c.INVEST_DAYS, "buyout": c.BUYOUT_DAYS}.get(kind)
     if wait:  # these wait for the price to move, so they never score as selling instantly
         days = min(wait, 1 + days_to_sell(qty, spd))
         sell_by = now + timedelta(days=wait)
@@ -200,6 +207,34 @@ def trend(row, d, held, now):
     text = (f"Rising: the price is {up:+.0%} against a day ago, sales are holding and the listed amount is"
             f" {units:+.0%}; aiming for {_money(target)} within {c.INVEST_DAYS} days, up from {_money(going)}")
     return _build("trend", row, d, held, now, d.house, lambda _: text, ladder=d.ladder, limit=going, target=target)
+
+
+def buyout(row, d, held, now):
+    """Market reset: buy the whole cheap shelf and relist it at a price the item has held most of its
+    history. Refused unless that history backs it: days of prices, no earlier jump that fell back,
+    no flood of listings, steady sales and a cheapest price that has stopped falling."""
+    s = d.series
+    hours, usual = history_hours(s, now), held_price(s, now)
+    if hours < c.BUYOUT_MIN_HISTORY_H or usual is None or failed_resets(s, now):
+        return None
+    normal = window_median(s, now, 0, hours + 1, "units")
+    tail = [p.min_ask for p in sorted(s, key=lambda p: p.at) if p.min_ask is not None and p.at <= now][-3:]
+    spd = sales_per_day(s, now)
+    # flooded: more piled up over the usual amount than half a day of sales clears, so sellers keep undercutting
+    if (listed_units(s, now) - normal > c.CAPTURE_SHARE * spd
+            or spd < 0.9 * sales_per_day_window(s, now, 24, 72)  # demand is fading
+            or len(tail) < 3 or tail[-1] < (1 + c.FALLING) * max(tail)):  # still falling over the last scans
+        return None
+    p = _build("buyout", row, d, held, now, d.house, lambda _: "", going=usual, ladder=d.ladder,
+               limit=int(c.BUY_BELOW * usual))
+    listed = sum(u for _, u in d.ladder)
+    if p is None or p.qty <= c.SUPPLY_SHARE * listed:  # a small lot is a flip, not a buyout
+        return None
+    p.reason = (f"Buyout: all {p.qty} listed up to {_money(p.max_unit_price)} ({p.qty / listed:.0%} of the"
+                f" {listed} listed), relisted at {_money(p.sell_price)}. The price was at least {_money(usual)}"
+                f" for {c.BUYOUT_HELD_SHARE:.0%} of the last {hours / 24:.0f} days, no earlier price jump fell"
+                f" back, listings are not piling up and sales are steady" + p.reason)
+    return p
 
 
 def craft_ladder(mats, made, limit):

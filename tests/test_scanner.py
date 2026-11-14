@@ -457,3 +457,18 @@ def test_underpriced_slow_seller_is_a_candidate_despite_few_sales():
                     details={("alliance", sword): detail(sword, series=slow, ladder=[(30000, 1), (50000, 1)])})
     assert run_cycle(fc, conn, NOW) == "done"
     assert [(p.kind, p.item_id) for p in db.load_candidates(conn)[0]] == [("slow", sword)]
+
+
+def test_a_shelf_cheap_against_the_week_is_a_buyout_candidate():
+    item = 100050
+    conn = db.connect(":memory:")
+    for days in (3, 2):  # cheap against our scans of the week, with none in the last day to call it a drop
+        at = (NOW - timedelta(days=days)).isoformat()
+        db.save_scan(conn, "alliance", at, at, 0.05, [row(item)])
+    shelf = pts([(h, 300, 12000, 0, 4) for h in range(3)] + [(h, 300, 20000, 0, 4) for h in range(3, 96)])
+    fc = FakeClient([row(item, min_ask=12000)], deals=[], details={
+        ("alliance", item): detail(item, series=shelf, ladder=[(12000, 40), (12500, 20), (19900, 100)])})
+    assert run_cycle(fc, conn, NOW) == "done"
+    (p,) = db.load_candidates(conn)[0]
+    assert (p.kind, p.qty, p.sell_price) == ("buyout", 60, 19899)
+    assert planner.plan([p], 10**9, [], True).ranked == []  # a bet: listed under Investments, never funded

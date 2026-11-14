@@ -349,7 +349,7 @@
 4378	1	3	Dark Iron Entrepreneur, Wetlands	
 4382	2	-1	Wizzle Brassbolts, Thousand Needles	
 4384	1	-1	Kimberly Hiett, Redridge Mountains	S=Kimberly Hiett, Redridge Mountains
-4389	19	0	Loslor Rudge, Dun Morogh	I=Loslor Rudge, Dun Morogh
+4389	19	1	Loslor Rudge, Dun Morogh	I=Loslor Rudge, Dun Morogh
 4399	50	0	Edna Mullby, Stormwind City	S=Edna Mullby, Stormwind City|I=Kersok Prond, Wetlands|D=Mythrin'dir, Darnassus|G=Billibub Cogspinner, Stormwind City
 4400	50	0	Edna Mullby, Stormwind City	S=Edna Mullby, Stormwind City|I=Kersok Prond, Wetlands|D=Mythrin'dir, Darnassus|G=Billibub Cogspinner, Stormwind City
 4404	2	-1	Wizzle Brassbolts, Thousand Needles	
@@ -488,7 +488,7 @@
 6330	4	0	Catherine Leland, Stormwind City	S=Catherine Leland, Stormwind City
 6342	6	1	Jessara Cordell, Stormwind City	S=Jessara Cordell, Stormwind City|D=Vaean, Darnassus|G=Tilli Thistlefuzz, Ironforge
 6349	1	1	Tilli Thistlefuzz, Ironforge	G=Tilli Thistlefuzz, Ironforge
-6365	15	0	Gretta Ganter, Dun Morogh	I=Gretta Ganter, Dun Morogh
+6365	15	1	Gretta Ganter, Dun Morogh	I=Gretta Ganter, Dun Morogh
 6368	7	0	Catherine Leland, Stormwind City	S=Catherine Leland, Stormwind City|D=Heldan Galesong, Darkshore
 6369	5	0	Tansy Puddlefizz, Ironforge	S=Lindea Rabonne, Hillsbrad Foothills|D=Heldan Galesong, Darkshore|G=Tansy Puddlefizz, Ironforge
 6377	1	1	Zixil, Hillsbrad Foothills	

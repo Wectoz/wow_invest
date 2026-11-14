@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlsplit
 from . import config as C
 from . import db, scanner
 from .planner import holds_proven, plan
-from .pricing import deposit, undercut
+from .pricing import undercut
 from .tables import ITEM_INFO, PROFESSIONS, VENDOR_ITEMS
 
 HERE = Path(__file__).parent
@@ -25,7 +25,7 @@ MAX_BODY = 10_240
 MAX_GOLD = 10_000_000
 KINDS = {"flip": ("Quick flip", "flip"), "cross": ("Cross-AH", "flip"), "hold": ("Hold", "hold"),
          "vendor": ("Vendor flip", "vendor"), "craft": ("Crafting", "vendor"), "rise": ("Forecast", "hold"),
-         "trend": ("Rising price", "hold"), "slow": ("Slow seller", "flip")}
+         "trend": ("Rising price", "hold"), "buyout": ("Buyout", "hold"), "slow": ("Slow seller", "flip")}
 # item type -> (label, the site's class names it covers; None = whatever the others leave)
 TYPES = {"gear": ("Gear", {"Armor", "Weapon"}), "mats": ("Materials", {"Trade Goods", "Reagent"}),
          "consumables": ("Consumables", {"Consumable"}), "recipes": ("Recipes", {"Recipe"}), "other": ("Other", None)}
@@ -36,7 +36,9 @@ SORTS = {"return": ("Best return", lambda p: -p.score), "profit": ("Most gold", 
 TABS = {"all": ("All", None), "ah": ("AH flips", {"flip", "cross", "hold"}),
         "slow": ("Slow sellers", {"slow"}),  # underpriced, but they sell under five a day
         "vendor": ("Vendor flips", {"vendor"}), "craft": ("Crafting", {"craft"}),
-        "invest": ("Investments", {"hold", "rise", "trend"})}  # multi-day bets: these also list the paper picks
+        "invest": ("Investments", {"hold", "rise", "trend"}),  # multi-day bets: these two also list the paper picks
+        "buyout": ("Buyouts", {"buyout"})}
+PAPER_TABS = ("invest", "buyout")
 QUALITY = {"uncommon": "green", "rare": "blue", "epic": "purple"}
 log = logging.getLogger(__name__)
 
@@ -96,14 +98,14 @@ def _dhm(d: datetime) -> str:
     return d.astimezone(UTC).strftime("%a %d %b %H:%M UTC")
 
 
-def sell_advice(h, current: int | None, cut: float, dep: int, now: datetime) -> tuple[str, int | None]:
+def sell_advice(h, current: int | None, cut: float, now: datetime) -> tuple[str, int | None]:
     """kind: nolist | wait | list | loss. Price is per unit."""
     if current is None:
         return "nolist", h.target
-    breakeven = math.ceil(h.price_paid / h.qty / (1 - cut)) + dep
+    breakeven = math.ceil(h.price_paid / h.qty / (1 - cut))  # a sale returns the listing deposit
     if h.sell_by is not None and now >= h.sell_by:
         return "loss", undercut(current)
-    if h.kind not in ("hold", "rise", "trend"):  # a flip sells under the competition; listed above it, it would not sell
+    if h.kind not in ("hold", "rise", "trend", "buyout"):  # a flip sells under the competition; listed above it, it would not sell
         return ("list", undercut(current)) if undercut(current) >= breakeven else ("wait", None)
     if current < breakeven:
         return "wait", None
@@ -142,9 +144,8 @@ def build_state(conn, now: datetime) -> dict:
         it = db.static(conn, h.item_id)
         cut, prices = houses[h.sell_at]
         cur = prices.get(h.item_id, (None,))[0]
-        dep = deposit(it["vendor_sell"] if it else None, h.sell_at)
-        kind, price = sell_advice(h, cur, cut, dep, now)
-        loss = max(0, math.ceil(h.price_paid / h.qty / (1 - cut)) + dep - (price or 0)) * h.qty
+        kind, price = sell_advice(h, cur, cut, now)
+        loss = max(0, math.ceil(h.price_paid / h.qty / (1 - cut)) - (price or 0)) * h.qty
         held.append({"h": h, "name": it["name"] if it else None, "icon": it["icon"] if it else None,
                      "quality": it["quality"] if it else None, "current": cur,
                      "kind": kind, "price": price, "loss": loss})
@@ -315,7 +316,7 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     sort = state["sort"] if state["sort"] in SORTS else "return"
 
     def in_tab(k, p=p):
-        pool = p.ranked + p.paper if k == "invest" else p.ranked
+        pool = p.ranked + p.paper if k in PAPER_TABS else p.ranked
         return [x for x in pool if TABS[k][1] is None or x.kind in TABS[k][1]]
 
     shown = sorted(in_tab(tab), key=SORTS[sort][1])
@@ -344,7 +345,12 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
                    'on them, but you can buy and track them. Holds wait out a flood, forecasts bet on items the crowd '
                    'has levelled past, rising prices bet that a day-long climb continues. Price held at target — holds: '
                    f'{esc(_rate(st["hold_hits"], st["hold_judged"]))} · forecasts and rising: '
-                   f'{esc(_rate(st["rise_hits"], st["rise_judged"]))}</div>' if tab == "invest" else ""))
+                   f'{esc(_rate(st["rise_hits"], st["rise_judged"]))}</div>' if tab == "invest" else "")
+                + ('<div class="sub">Buy an item\'s whole cheap shelf and relist it at the price it usually holds. '
+                   'Only shown when days of history back it: no earlier price jump that fell back, no flood of '
+                   'listings, steady sales and a price that has stopped falling. Not proven yet, so the program does '
+                   'not spend your gold on them, and one only pays if you really buy the whole shelf. Price held at '
+                   f'target: {esc(_rate(st["buyout_hits"], st["buyout_judged"]))}</div>' if tab == "buyout" else ""))
     tabs = "".join(
         f'<a class="tab{" on" if k == tab else ""}" href="/?tab={k}">{esc(label)} '
         f'<span>{len(in_tab(k))}</span></a>'
@@ -398,7 +404,7 @@ def _int(text, name, lo, hi) -> int:
 
 def _bought(conn, f, now):
     kind = f.get("kind")
-    if kind not in ("flip", "cross", "vendor", "craft", "hold", "rise", "trend", "slow"):
+    if kind not in ("flip", "cross", "vendor", "craft", "hold", "rise", "trend", "buyout", "slow"):
         raise ValueError("Unknown kind")
     try:
         sell_by = _aware(f.get("sell_by"))

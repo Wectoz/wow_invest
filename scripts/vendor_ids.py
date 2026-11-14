@@ -98,10 +98,11 @@ def main(wow_dir: str, pfquest_items: str) -> int:
     assert stock[2320][66] == 0 and stock[8846], "Coarse Thread is unlimited; Gromsblood has a stock number"
 
     def limit(item, sellers):
-        """0 when some vendor never runs out, -1 when pfQuest knows none of its vendors (a Forever-only
+        """0 when at least half its known vendors never run out, -1 when pfQuest knows none of its vendors (a Forever-only
         item or vendor), else the largest stock on offer."""
         known = [stock[item][n] for n in sellers if n in stock.get(item, {})]
-        return -1 if not known else 0 if 0 in known else max(known)
+        # a lone "unlimited" vendor among limited ones is a data error (Strong Fishing Pole, seen in game)
+        return -1 if not known else 0 if 2 * known.count(0) >= len(known) else max(known)
 
     def where(item, sellers):
         """One vendor to send the player to: one that never runs out, in a capital city if any.

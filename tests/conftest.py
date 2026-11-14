@@ -23,7 +23,7 @@ def _fixed_thresholds(monkeypatch):
     monkeypatch.setattr(config, "MIN_PROFIT", 30000)
     monkeypatch.setattr(config, "TOP_N", 15)
     monkeypatch.setattr(config, "MIN_UNIT_PROFIT", 0)
-    monkeypatch.setattr(config, "DETAIL_QUOTAS", {"flip": 25, "cross": 20, "vendor": 10, "hold": 25, "rise": 10, "trend": 10, "slow": 10})
+    monkeypatch.setattr(config, "DETAIL_QUOTAS", {"flip": 25, "cross": 20, "vendor": 10, "hold": 25, "rise": 10, "trend": 10, "buyout": 10, "slow": 10})
     monkeypatch.setattr(config, "BUY_BELOW", 0.80)
     monkeypatch.setattr(config, "SNIPE_DAYS", 0.25)
     # the neutral AH is switched off in config.py for now; the tests keep its code path alive
