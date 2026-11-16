@@ -56,7 +56,7 @@ def test_parse_detail_sorts_ladder_and_zeroes_null_counts():
 def test_get_json_waits_between_requests():
     c, _, sleeps = client({"a": 1}, {"a": 2}, times=[0, 0.2, 0.2])
     c.get_json("/x"); c.get_json("/x")
-    assert sleeps == [0.8]
+    assert sleeps == [config.REQUEST_GAP_S - 0.2]
 
 
 def test_get_json_retries_5xx_then_succeeds():
@@ -129,7 +129,7 @@ def test_get_json_honours_retry_after_on_429():
 def test_get_json_caps_retry_after_at_five_minutes():
     c, _, sleeps = client(http(429, 86400), {"ok": 1})
     c.get_json("/x")
-    assert sleeps[0] == 300 and 86400 not in sleeps  # then the usual 1 s gap (the fake clock never moves)
+    assert sleeps[0] == 300 and 86400 not in sleeps  # then the usual gap (the fake clock never moves)
 
 
 def test_requests_send_generic_user_agent():
@@ -175,3 +175,20 @@ def test_a_renamed_sales_field_fails_the_scan_instead_of_reading_as_zero():
     with pytest.raises(KeyError):
         parse_detail({"item": {"id": 5}, "series": [{"captured_at": "2026-11-08T21:13:51+00:00", "partial_fills": 1}]},
                      "alliance", 0.05)
+
+
+def test_gap_runs_from_the_start_of_a_request_so_a_slow_answer_is_not_waited_for_twice():
+    t, sleeps = [0.0], []
+
+    def fetch(url, headers):
+        t[0] += 0.4  # the site takes this long to answer
+        return "{}"
+
+    def sleep(s):
+        sleeps.append(round(s, 3))
+        t[0] += s
+
+    c = Client(fetch=fetch, sleep=sleep, clock=lambda: t[0])
+    c.get_json("/a")
+    c.get_json("/b")
+    assert sleeps == [round(config.REQUEST_GAP_S - 0.4, 3)]

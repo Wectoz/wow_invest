@@ -4,7 +4,7 @@ A desktop helper for the World of Warcraft auction house. It watches prices and 
 
 It never touches the game. You buy and sell by hand.
 
-Prices come from the public [blackwater.exchange](https://blackwater.exchange) API, read at about one request a second. WoW Invest is not affiliated with Blizzard or blackwater.exchange.
+Prices come from the public [blackwater.exchange](https://blackwater.exchange) API, read at about two requests a second, one at a time. WoW Invest is not affiliated with Blizzard or blackwater.exchange.
 
 ## Install (Windows 10/11)
 

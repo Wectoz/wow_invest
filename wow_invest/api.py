@@ -1,6 +1,7 @@
 """Polite HTTP client for the blackwater.exchange JSON API, plus JSON -> models parsers."""
 import http.client
 import json
+import logging
 import time
 import urllib.error
 import urllib.request
@@ -9,6 +10,8 @@ from datetime import datetime
 from . import config
 from .models import Detail, Point, Row
 from .tables import ITEM_ICON, ITEM_INFO
+
+log = logging.getLogger(__name__)
 
 
 class ApiError(Exception):
@@ -82,23 +85,22 @@ class Client:
                 if wait > 0:
                     self._sleep(wait)
             retry_after = None
+            self._last = self._clock()  # from the start of the request: the answer time is not added to the gap
             try:
-                raw = self._fetch(url, {"User-Agent": config.USER_AGENT})
-                self._last = self._clock()
-                return json.loads(raw)
+                return json.loads(self._fetch(url, {"User-Agent": config.USER_AGENT}))
             except urllib.error.HTTPError as e:
-                self._last = self._clock()
                 if e.code == 404 or not (e.code == 429 or e.code >= 500):
                     raise ApiError(f"HTTP {e.code} for {path}", transient=False) from e
                 ra = e.headers.get("Retry-After") if e.headers else None
                 retry_after = min(int(ra), config.RETRY_AFTER_MAX_S) if ra and ra.isdigit() else None
                 err = e
             except (urllib.error.URLError, ValueError, OSError, http.client.HTTPException) as e:  # ValueError covers bad JSON
-                self._last = self._clock()
                 err = e
             if delay is None:
                 raise ApiError(f"giving up on {path}: {err}") from err
-            self._sleep(retry_after if retry_after is not None else delay)
+            wait = retry_after if retry_after is not None else delay
+            log.warning("retrying %s in %s s: %s", path, wait, err)  # silent waits made slow scans a mystery
+            self._sleep(wait)
 
     @_shaped
     def markets(self):
