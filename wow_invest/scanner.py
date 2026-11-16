@@ -348,8 +348,10 @@ def _timed(conn, cycle):
     global started
     started = time.time()
     result = cycle()
-    if result == "done":
-        db.set_setting(conn, "scan_secs", str(max(1, round(time.time() - started))))
+    if result == "done":  # the bar paces itself on the average of the last few: one odd scan does not throw it
+        times = [*json.loads(db.get_setting(conn, "scan_times", "[]")), max(1, round(time.time() - started))][-5:]
+        db.set_setting(conn, "scan_times", json.dumps(times))
+        db.set_setting(conn, "scan_secs", str(round(sum(times) / len(times))))
     return result
 
 

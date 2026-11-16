@@ -42,6 +42,21 @@ TABS = {"all": ("All", None), "ah": ("AH flips", {"flip", "cross", "hold"}),
         "invest": ("Investments", {"hold", "rise", "trend"}),  # multi-day bets: these two also list the paper picks
         "buyout": ("Buyouts", {"buyout"}), "swing": ("Daily swings", {"swing"}),
         "tracked": ("★ Tracked", set())}  # no picks: the items you starred, and what a search finds
+# what each tab means: shown when the pointer rests on the tab (the little ⓘ marks it)
+TAB_INFO = {
+    "all": "Every pick, in the order you chose.",
+    "ah": "An item listed well under its own usual price. Buy it and sell it again at the usual price, most often within "
+          "a day or two.",
+    "slow": "Underpriced items that sell fewer than five a day, like gear and recipes. More gold a piece, but "
+            "they can take days to sell.",
+    "vendor": "Bought from a vendor who never runs out, sold on the auction house for more.",
+    "craft": "Buy the reagents, craft the item, and sell it for more than the reagents cost.",
+    "invest": "Bets over several days: prices that are climbing or expected to rise. Riskier, and some are only "
+              "followed on paper.",
+    "buyout": "Buy the whole cheap shelf and sell it again at the price the item has held over the past days.",
+    "swing": "Fast sellers whose price dips and comes back every day. Buy the dip and sell at the daily high.",
+    "tracked": "The items you starred, with their price on other realms.",
+}
 SEARCH_MAX = 30
 PAPER_TABS = ("invest", "buyout", "swing")
 QUALITY = {"uncommon": "green", "rare": "blue", "epic": "purple"}
@@ -572,8 +587,8 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
                     lambda x, n: _pick_row(x, n + skip, dim=x.kind in funded_kinds, starred=x.item_id in w["ids"])) + pager
     count = lambda k: len(w["starred"]) if k == "tracked" else len(in_tab(k))
     tabs = "".join(
-        f'<a class="tab{" on" if k == tab else "" if count(k) else " none"}" href="/?tab={k}">{esc(label)} '
-        f'<span>{count(k)}</span></a>'
+        f'<a title="{esc(TAB_INFO[k])}" class="tab{" on" if k == tab else "" if count(k) else " none"}" '
+        f'href="/?tab={k}">{esc(label)} <span>{count(k)}</span><i class="info" aria-hidden="true">ⓘ</i></a>'
         for k, (label, kinds) in TABS.items())
     ban = []
     if error:

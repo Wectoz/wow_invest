@@ -402,6 +402,14 @@ def test_timed_cycle_remembers_how_long_a_full_scan_takes():
     assert scanner._timed(conn, lambda: "done") == "done" and db.get_setting(conn, "scan_secs") == "1"
 
 
+def test_scan_timer_is_the_average_of_the_last_few_full_scans():
+    conn = db.connect(":memory:")
+    db.set_setting(conn, "scan_times", "[9000, 100, 200, 300, 399]")  # the oldest drops out
+    scanner._timed(conn, lambda: "done")  # takes 1 s at the least
+    assert db.get_setting(conn, "scan_times") == "[100, 200, 300, 399, 1]"
+    assert db.get_setting(conn, "scan_secs") == "200"
+
+
 def test_craft_pick_prices_reagents_from_the_ah_and_the_vendor(monkeypatch):
     product, bolt, thread = 100010, 100011, 100012
     monkeypatch.setattr(scanner, "RECIPES", [(product, "Tailoring", 125, 1, ((bolt, 2), (thread, 1))),

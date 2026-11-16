@@ -665,3 +665,11 @@ def test_picks_come_ten_to_a_page_and_a_post_lands_back_on_the_same_page(server)
     assert e.value.code == 303 and e.value.headers["Location"] == "/?tab=all&page=2"
     db.save_candidates(c, [mkpick(1, "only-one")], NOW.isoformat())
     assert "Page 1" not in req(base + "/?tab=all")[1]  # a single page needs no pager
+
+
+def test_every_tab_explains_itself():
+    html = render_page(build_state(db.connect(":memory:"), NOW))
+    assert set(web.TAB_INFO) == set(web.TABS)
+    for tip in web.TAB_INFO.values():
+        assert f'<a title="{tip}" class="tab' in html
+    assert html.count('<i class="info"') == len(web.TABS)
