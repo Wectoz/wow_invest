@@ -472,3 +472,18 @@ def test_a_shelf_cheap_against_the_week_is_a_buyout_candidate():
     (p,) = db.load_candidates(conn)[0]
     assert (p.kind, p.qty, p.sell_price) == ("buyout", 60, 19899)
     assert planner.plan([p], 10**9, [], True).ranked == []  # a bet: listed under Investments, never funded
+
+
+def test_a_fast_seller_in_its_daily_dip_is_a_swing_candidate():
+    item = 100060
+    conn = db.connect(":memory:")
+    hours_ago = (NOW - timedelta(hours=10)).isoformat()
+    db.save_scan(conn, "alliance", hours_ago, hours_ago, 0.05, [row(item)])  # 20000 earlier today
+    # eight hours a day at 15000, the rest at 20000, for three days; 48 sold a day against 40 listed
+    dips = pts([(h, 40, 15000 if h % 24 < 8 else 20000, 0, 4) for h in range(72)])
+    fc = FakeClient([row(item, min_ask=15000, sold=60, units=40)], deals=[], details={
+        ("alliance", item): detail(item, series=dips, ladder=[(15000, 30), (20000, 50)])})
+    assert run_cycle(fc, conn, NOW) == "done"
+    (p,) = db.load_candidates(conn)[0]
+    assert (p.kind, p.qty, p.sell_price) == ("swing", 10, 19999)
+    assert planner.plan([p], 10**9, [], True).ranked == []  # a bet: shown on its own tab, never funded

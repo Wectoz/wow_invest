@@ -5,7 +5,7 @@ from datetime import timedelta
 from . import config as c
 from .crowd import item_band, overlaps
 from .models import Pick
-from .pricing import (change, days_to_sell, deposit, failed_resets, going_price, held_price, history_hours,
+from .pricing import (change, day_range, days_to_sell, deposit, failed_resets, going_price, held_price, history_hours,
                       ladder_buy, listed_units, max_units, net_proceeds, sales_per_day, sales_per_day_window,
                       score, sureness, undercut, window_median)
 from .tables import GATHER_BANDS, VENDOR_ITEMS, vendor_deal, vendor_unit
@@ -83,7 +83,8 @@ def _build(kind, row, sell, held, now, buy_at, why, going=0, ladder=None, limit=
         return None
     target = price(left)
     profit = net_proceeds(target, qty, sell.cut, lost(qty)) - cost
-    wait = {"hold": c.HOLD_DAYS, "rise": c.RISE_DAYS, "trend": c.INVEST_DAYS, "buyout": c.BUYOUT_DAYS}.get(kind)
+    wait = {"hold": c.HOLD_DAYS, "rise": c.RISE_DAYS, "trend": c.INVEST_DAYS, "buyout": c.BUYOUT_DAYS,
+            "swing": c.SWING_WAIT_DAYS}.get(kind)
     if wait:  # these wait for the price to move, so they never score as selling instantly
         days = min(wait, 1 + days_to_sell(qty, spd))
         sell_by = now + timedelta(days=wait)
@@ -239,6 +240,27 @@ def buyout(row, d, held, now):
                 f" for {c.BUYOUT_HELD_SHARE:.0%} of the last {hours / 24:.0f} days, no earlier price jump fell"
                 f" back, listings are not piling up and sales are steady" + p.reason)
     return p
+
+
+def swing(row, d, held, now):
+    """Daily swing: a fast seller whose price dipped and came back on each of the last days. Buy the dip,
+    relist at the lowest of those daily highs. Refused when the highs are sinking (a falling market looks
+    like a dip every day) or when less sells in a day than is listed (nothing empties the shelf)."""
+    s = d.series
+    days = [day_range(s, now, i) for i in range(c.SWING_DAYS)]
+    if None in days or any(lo > c.BUY_BELOW * hi for lo, hi in days):
+        return None
+    highs = [hi for _, hi in days]
+    if min(highs) < (1 + c.FALLING) * max(highs) or sales_per_day(s, now) < listed_units(s, now):
+        return None
+    target = undercut(int(min(highs)))
+
+    def why(top):
+        return (f"Daily swing: on each of the last {c.SWING_DAYS} days the price dipped at least"
+                f" {1 - c.BUY_BELOW:.0%} and came back to {_money(target)} or more; listed now at up to"
+                f" {_money(top)}, and more sells in a day than is listed")
+    return _build("swing", row, d, held, now, d.house, why, ladder=d.ladder, limit=int(c.BUY_BELOW * target),
+                  target=target)
 
 
 def craft_ladder(mats, made, limit):

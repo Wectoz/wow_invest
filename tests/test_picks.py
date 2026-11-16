@@ -5,7 +5,7 @@ import pytest
 from tests.conftest import NOW, pts, steady
 from wow_invest import config
 from wow_invest.models import Detail, Row
-from wow_invest.picks import buyout, craft_flip, craft_ladder, cross_flip, hold, quick_flip, rise, vendor_flip
+from wow_invest.picks import buyout, craft_flip, craft_ladder, cross_flip, hold, quick_flip, rise, swing, vendor_flip
 from wow_invest.planner import plan
 from wow_invest.pricing import failed_resets
 from wow_invest.tables import VENDOR_ITEMS
@@ -321,3 +321,26 @@ def test_items_with_one_unlimited_vendor_among_limited_ones_count_as_limited():
     assert VENDOR_ITEMS[6365] == 1 and VENDOR_ITEMS[4389] == 1
     d = detail(ladder=[(19900, 100)], purchase_price=901)
     assert vendor_flip(row(item_id=6365), d, held=0, now=NOW) is None
+
+
+# three days of hourly prices: eight hours a day at `low` (the dip, where it is now), the rest at the day's high
+def swinging(highs=(20000, 20000, 20000), low=15000, units=40):
+    return pts([(h, units, low if h % 24 < 8 else highs[h // 24], 0, 4) for h in range(72)])
+
+
+def test_swing_buys_the_daily_dip_and_relists_at_the_daily_high():
+    p = swing(row(), detail(series=swinging(), ladder=[(15000, 30), (20000, 50)]), held=0, now=NOW)
+    # 48 sold a day against 40 listed; a quarter of the listed is 10; int(19999 * 10 * 0.95) = 189990 - 150000
+    assert (p.kind, p.qty, p.cost, p.sell_price, p.profit) == ("swing", 10, 150000, 19999, 39990)
+    assert p.sell_by == NOW + timedelta(days=config.SWING_WAIT_DAYS) and "Daily swing" in p.reason
+    assert plan([p], 10**9, [], True).ranked == []  # not proven: shown, never funded
+
+
+@pytest.mark.parametrize("series", [
+    swinging(low=19000),  # no real dip
+    swinging(highs=(16000, 18000, 20000), low=12000),  # the highs sink day by day: a falling market
+    swinging(units=300),  # far more listed than sells in a day
+    swinging()[:48],  # only two days of prices
+])
+def test_swing_refused_without_a_dip_that_comes_back_every_day(series):
+    assert swing(row(), detail(series=series, ladder=[(12000, 30), (20000, 50)]), held=0, now=NOW) is None

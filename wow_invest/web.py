@@ -25,7 +25,8 @@ MAX_BODY = 10_240
 MAX_GOLD = 10_000_000
 KINDS = {"flip": ("Quick flip", "flip"), "cross": ("Cross-AH", "flip"), "hold": ("Hold", "hold"),
          "vendor": ("Vendor flip", "vendor"), "craft": ("Crafting", "vendor"), "rise": ("Forecast", "hold"),
-         "trend": ("Rising price", "hold"), "buyout": ("Buyout", "hold"), "slow": ("Slow seller", "flip")}
+         "trend": ("Rising price", "hold"), "buyout": ("Buyout", "hold"),
+         "swing": ("Daily swing", "hold"), "slow": ("Slow seller", "flip")}
 # item type -> (label, the site's class names it covers; None = whatever the others leave)
 TYPES = {"gear": ("Gear", {"Armor", "Weapon"}), "mats": ("Materials", {"Trade Goods", "Reagent"}),
          "consumables": ("Consumables", {"Consumable"}), "recipes": ("Recipes", {"Recipe"}), "other": ("Other", None)}
@@ -37,8 +38,10 @@ TABS = {"all": ("All", None), "ah": ("AH flips", {"flip", "cross", "hold"}),
         "slow": ("Slow sellers", {"slow"}),  # underpriced, but they sell under five a day
         "vendor": ("Vendor flips", {"vendor"}), "craft": ("Crafting", {"craft"}),
         "invest": ("Investments", {"hold", "rise", "trend"}),  # multi-day bets: these two also list the paper picks
-        "buyout": ("Buyouts", {"buyout"})}
-PAPER_TABS = ("invest", "buyout")
+        "buyout": ("Buyouts", {"buyout"}), "swing": ("Daily swings", {"swing"}),
+        "tracked": ("★ Tracked", set())}  # no picks: the items you starred, and what a search finds
+SEARCH_MAX = 30
+PAPER_TABS = ("invest", "buyout", "swing")
 QUALITY = {"uncommon": "green", "rare": "blue", "epic": "purple"}
 log = logging.getLogger(__name__)
 
@@ -105,7 +108,7 @@ def sell_advice(h, current: int | None, cut: float, now: datetime) -> tuple[str,
     breakeven = math.ceil(h.price_paid / h.qty / (1 - cut))  # a sale returns the listing deposit
     if h.sell_by is not None and now >= h.sell_by:
         return "loss", undercut(current)
-    if h.kind not in ("hold", "rise", "trend", "buyout"):  # a flip sells under the competition; listed above it, it would not sell
+    if h.kind not in ("hold", "rise", "trend", "buyout", "swing"):  # a flip sells under the competition; listed above it, it would not sell
         return ("list", undercut(current)) if undercut(current) >= breakeven else ("wait", None)
     if current < breakeven:
         return "wait", None
@@ -117,7 +120,33 @@ def _last_scan(conn) -> datetime | None:
     return _aware(db.candidates_at(conn)) or (_aware(ali["captured_at"]) if ali else None)
 
 
-def build_state(conn, now: datetime) -> dict:
+def _watch(conn, now, q: str) -> dict:
+    """The starred items, and the best sellers whose name holds `q`, with the latest scan's numbers."""
+    ids = json.loads(db.get_setting(conn, "starred", "[]"))
+    q = q.strip().lower()
+    found = [r[0] for r in conn.execute(
+        """SELECT i.item_id FROM items i LEFT JOIN snapshots s ON s.item_id = i.item_id AND s.scan_id =
+             (SELECT id FROM scans WHERE house='alliance' ORDER BY captured_at DESC LIMIT 1)
+           WHERE instr(lower(i.name), ?) ORDER BY coalesce(s.sold_24h, -1) DESC, i.name LIMIT ?""",
+        (q, SEARCH_MAX))] if len(q) >= 2 else []
+    cur, old = db.rows_at(conn, "alliance", 0, now), db.rows_at(conn, "alliance", 24, now)
+
+    def item(i):
+        it = db.static(conn, i)
+        ask, units, sold = cur.get(i, (None, 0, 0))
+        return {"item_id": i, "name": it["name"] if it else None, "icon": it["icon"] if it else None,
+                "quality": it["quality"] if it else None, "ask": ask, "units": units, "sold": sold,
+                "old": old.get(i, (None,))[0], "starred": i in ids}
+    return {"q": q, "ids": set(ids), "found": [item(i) for i in found], "starred": [item(i) for i in ids]}
+
+
+def _star(conn, f, now):
+    i = _int(f.get("item_id"), "Item", 1, 10**9)
+    ids = json.loads(db.get_setting(conn, "starred", "[]"))
+    db.set_setting(conn, "starred", json.dumps([x for x in ids if x != i] if i in ids else ids + [i]))
+
+
+def build_state(conn, now: datetime, q: str = "") -> dict:
     cands, captured = db.load_candidates(conn)
     holdings = db.open_holdings(conn)
     # the scan already capped for holdings bought before it; one bought since makes its pick out of date
@@ -172,7 +201,7 @@ def build_state(conn, now: datetime) -> dict:
         "auctions_at": auctions, "data_age_min": int((now - auctions).total_seconds() // 60) if auctions else None,
         # scans run hourly (the site's cadence), so the next one is expected an hour after the last
         "next_scan": last_ok + timedelta(hours=1) if last_ok else None,
-        "now": now,
+        "now": now, "watch": _watch(conn, now, q),
     }
 
 
@@ -217,7 +246,28 @@ def _bought_form(p) -> str:
             f'<button>I bought this</button></form>')
 
 
-def _pick_row(p, rank=None, form=True, dim=False) -> str:
+def _star_form(item_id, on) -> str:
+    return (f'<form class="hide" method="post" action="/star"><input type="hidden" name="item_id" value="{esc(item_id)}">'
+            f'<button title="{"Stop tracking this item" if on else "Keep this item on the Tracked tab"}">'
+            f'{"★ Tracked" if on else "☆ Track"}</button></form>')
+
+
+def _item_row(v, picks) -> str:
+    """A tracked or found item: what it costs and how it sells now, and any pick on it."""
+    tags = "".join(f'<span class="tag">{esc(k)} pick</span>' for k in picks.get(v["item_id"], ()))
+    if v["ask"] is None:
+        price, moved = "not listed now", ""
+    else:
+        price = fmt_money(v["ask"])
+        moved = f'<br>{v["ask"] / v["old"] - 1:+.0%} vs a day ago' if v["old"] else ""
+    return (f'<div class="pick"><div class="row"><div></div>{_ico(v["icon"], v["quality"])}'
+            f'<div><span class="name {_qcls(v["quality"])}">{_name(v["item_id"], v["name"])}</span>{tags}'
+            f'<div class="why">{v["units"]} listed · ≈{v["sold"] // 2} sold/day (estimate)</div></div>'
+            f'<div class="nums">{price}{moved}</div></div>'
+            f'<div class="acts">{_star_form(v["item_id"], v["starred"])}</div></div>')
+
+
+def _pick_row(p, rank=None, form=True, dim=False, starred=False) -> str:
     label, tcls = KINDS.get(p.kind, (p.kind, ""))
     unf = " unfunded" if dim and not p.funded else ""
     note = '<span class="note">not enough gold</span>' if unf else ""
@@ -231,7 +281,8 @@ def _pick_row(p, rank=None, form=True, dim=False) -> str:
             f' · {p.depth} listed just above your price</p>{sb}</details>'
             + (f'<details class="bought"><summary>I bought this</summary>{_bought_form(p)}</details>' if form else "")
             + f'<form class="hide" method="post" action="/hide"><input type="hidden" name="item_id" value="{esc(p.item_id)}">'
-              '<button title="Never suggest this item again">Hide</button></form></div>')
+              '<button title="Never suggest this item again">Hide</button></form>'
+            + _star_form(p.item_id, starred) + '</div>')
     rk = f'<div class="rank">{rank}</div>' if rank else "<div></div>"
     return (f'<div class="pick{unf}"><div class="row">{rk}{_ico(p.icon, p.quality)}'
             f'<div><span class="name {_qcls(p.quality)}">{_name(p.item_id, p.name)}</span>'
@@ -350,10 +401,32 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
                    'Only shown when days of history back it: no earlier price jump that fell back, no flood of '
                    'listings, steady sales and a price that has stopped falling. Not proven yet, so the program does '
                    'not spend your gold on them, and one only pays if you really buy the whole shelf. Price held at '
-                   f'target: {esc(_rate(st["buyout_hits"], st["buyout_judged"]))}</div>' if tab == "buyout" else ""))
+                   f'target: {esc(_rate(st["buyout_hits"], st["buyout_judged"]))}</div>' if tab == "buyout" else "")
+                + ('<div class="sub">Fast sellers whose price dipped and came back on each of the last days: buy '
+                   'the dip, relist at the daily high and wait for the price to return, usually within a day. '
+                   'Refused when the highs are sinking or when less sells in a day than is listed. Not proven yet, '
+                   'so the program does not spend your gold on them. Price came back to target: '
+                   f'{esc(_rate(st["swing_hits"], st["swing_judged"]))}</div>' if tab == "swing" else ""))
+    w = state["watch"]
+    search = ('<form class="controls" method="get" action="/"><input type="hidden" name="tab" value="tracked">'
+              f'<input type="text" name="q" value="{esc(w["q"])}" placeholder="Search items" aria-label="Search items">'
+              '<button>Search</button></form>')
+    if tab == "tracked":
+        on = {}
+        for x in p.ranked + p.paper:
+            on.setdefault(x.item_id, []).append(KINDS.get(x.kind, (x.kind,))[0])
+        controls = ""  # the pick filters do not apply to this list
+        buy = ((f'<div class="sect">Found for “{esc(w["q"])}”</div>'
+                + _rows(w["found"], "No item with that name.", lambda v, n: _item_row(v, on))
+                + '<div class="sect">Tracked</div>' if len(w["q"]) >= 2 else "")
+               + _rows(w["starred"], "Nothing tracked yet. Search for an item, or press ☆ Track on a pick.",
+                       lambda v, n: _item_row(v, on)))
+    else:
+        buy = _rows(shown, "Nothing worth buying right now.",
+                    lambda x, n: _pick_row(x, n, dim=x.kind in funded_kinds, starred=x.item_id in w["ids"]))
     tabs = "".join(
         f'<a class="tab{" on" if k == tab else ""}" href="/?tab={k}">{esc(label)} '
-        f'<span>{len(in_tab(k))}</span></a>'
+        f'<span>{len(w["starred"]) if k == "tracked" else len(in_tab(k))}</span></a>'
         for k, (label, kinds) in TABS.items())
     ban = []
     if error:
@@ -379,7 +452,7 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     return Template((HERE / "page.html").read_text(encoding="utf-8")).substitute(
         css_href=esc(css_href), banners="".join(ban), here=f"/?tab={tab}",
         version=esc(_version(state)),
-        tabs=f'<nav class="tabs">{tabs}</nav>' + controls + (_profession_bar(state["professions"]) + _skills_form(state["skills"]) if tab == "craft" else "")
+        tabs=f'<nav class="tabs">{tabs}</nav>' + search + controls + (_profession_bar(state["professions"]) + _skills_form(state["skills"]) if tab == "craft" else "")
         + (_rep_form(state["rep"]) if tab == "vendor" else ""), reload_s=5 if state["scanning"] else 300,
         refresh_off=" disabled" if state["scanning"] else "",
         sub=f'Alliance · Normal (PvE) · EU — {esc(" + ".join(HOUSE[h] for h in C.SCAN_HOUSES))} — {esc(age)}{esc(nxt)}',
@@ -387,8 +460,7 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
         crowd=(f'lvl {esc(state["crowd"])}' + (f' <span class="sub">+{esc(state["drift"])} lvl/day</span>'
                                                  if state["drift"] else "")) if state["crowd"] else "unknown",
         last_scan=esc(last), hit_rate=esc(hit), real=_real(state["real"]),
-        buy=_rows(shown, "Nothing worth buying right now.",
-                  lambda x, n: _pick_row(x, n, dim=x.kind in funded_kinds)),
+        buy=buy,
         sell=_rows(state["holdings"], "Nothing held.", lambda x, n: _held_row(x)))
 
 
@@ -404,7 +476,7 @@ def _int(text, name, lo, hi) -> int:
 
 def _bought(conn, f, now):
     kind = f.get("kind")
-    if kind not in ("flip", "cross", "vendor", "craft", "hold", "rise", "trend", "buyout", "slow"):
+    if kind not in ("flip", "cross", "vendor", "craft", "hold", "rise", "trend", "buyout", "swing", "slow"):
         raise ValueError("Unknown kind")
     try:
         sell_by = _aware(f.get("sell_by"))
@@ -496,6 +568,7 @@ ROUTES = {
     "/profession": _pick_profession,
     "/type": _pick_type,
     "/hide": _hide,
+    "/star": _star,
     "/unhide": lambda c, f, now: db.set_setting(c, "hidden", "[]"),
     "/sort": _sort,
     "/min-profit": _floors,
@@ -528,10 +601,10 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return not (post and origin is not None and origin not in {f"http://{h}" for h in ok})
 
-    def _page(self, code=200, error=None, tab="all"):
+    def _page(self, code=200, error=None, tab="all", q=""):
         conn = db.connect(self.server.db_path)
         try:
-            html = render_page(build_state(conn, datetime.now(UTC)), error, tab=tab)
+            html = render_page(build_state(conn, datetime.now(UTC), q), error, tab=tab)
         finally:
             conn.close()
         self._send(code, html, "text/html; charset=utf-8")
@@ -541,7 +614,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, "forbidden")
         path = urlsplit(self.path).path
         if path == "/":
-            self._page(tab=_tab(self.path))
+            self._page(tab=_tab(self.path), q=parse_qs(urlsplit(self.path).query).get("q", [""])[0][:60])
         elif path == "/version":
             conn = db.connect(self.server.db_path)
             try:

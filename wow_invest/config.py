@@ -48,12 +48,16 @@ STATIC_PER_CYCLE = 60
 REP_CITIES = {"S": "Stormwind", "I": "Ironforge", "D": "Darnassus", "G": "Gnomeregan Exiles"}
 REP_DISCOUNT = {"Friendly": 0.05, "Honored": 0.10, "Revered": 0.15, "Exalted": 0.20}
 REP_DEFAULT = '{"S": "Revered"}'  # until the player sets their own standings
-DETAIL_QUOTAS = {"flip": 400, "cross": 40, "vendor": 40, "hold": 30, "rise": 25, "trend": 30, "buyout": 40, "slow": 60}
+DETAIL_QUOTAS = {"flip": 400, "cross": 40, "vendor": 40, "hold": 30, "rise": 25, "trend": 30, "buyout": 40, "swing": 40, "slow": 60}
 # buyout: take the whole cheap shelf and relist at the price the item usually holds
 BUYOUT_MIN_HISTORY_H = 72  # judge a buyout on three days of prices at least
 BUYOUT_HELD_SHARE = 0.70  # the relist price must have been met or beaten this share of that time
 BUYOUT_DAYS = 3  # buy no more than should resell within this long
 BUYOUT_SPIKE = 1.5  # a jump this far over the day before is someone's earlier buyout
+# swing: a fast seller whose price dips and comes back every day; buy the dip, relist at the daily high
+SWING_DAYS = 3  # the dip and the recovery must show on each of this many days
+SWING_MIN_POINTS = 6  # prices a day needs before its low and high mean anything
+SWING_WAIT_DAYS = 2  # one day for the price to come back, one spare
 MAX_ERRORS_IN_ROW = 3
 JUDGE_RUN = 3
 PROVEN_RECENT = 20

@@ -44,7 +44,7 @@ class Detail:
 
 @dataclass(slots=True)
 class Pick:
-    kind: str  # flip | cross | vendor | craft | hold | rise | trend | slow
+    kind: str  # flip | cross | vendor | craft | hold | rise | trend | buyout | swing | slow
     item_id: int
     name: str
     icon: str | None

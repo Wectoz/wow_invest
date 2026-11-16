@@ -1,7 +1,7 @@
 """Pure money / sales / trend math."""
 import math
 from datetime import datetime
-from statistics import median
+from statistics import median, quantiles
 
 from . import config as c
 
@@ -31,6 +31,15 @@ def window_median(series, now, start_h: float, end_h: float, field: str) -> floa
     v = [getattr(p, field) for p in series
          if getattr(p, field) is not None and start_h <= _age_h(p, now) < end_h]
     return median(v) if v else None
+
+
+def day_range(series, now, day: int) -> tuple[float, float] | None:
+    """Low and high the cheapest ask spent a real part of that day at (its quartiles); day 0 is the last 24h."""
+    v = [p.min_ask for p in series if p.min_ask is not None and 24 * day <= _age_h(p, now) < 24 * (day + 1)]
+    if len(v) < c.SWING_MIN_POINTS:
+        return None
+    lo, _, hi = quantiles(v, n=4)
+    return lo, hi
 
 
 def change(series, now, field) -> float | None:

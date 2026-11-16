@@ -3,7 +3,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -501,3 +501,30 @@ def test_buyouts_have_their_own_tab():
     h = state_html(c, tab="buyout")
     assert "Linen Cloth" in h and "Buyouts <span>1</span>" in h and "Investments <span>0</span>" in h
     assert "whole cheap shelf" in h and "Linen Cloth" not in state_html(c, tab="invest")
+
+
+def test_daily_swings_have_their_own_tab():
+    c = seed(":memory:", [mkpick(2, kind="swing", funded=False)])
+    h = state_html(c, tab="swing")
+    assert "Linen Cloth" in h and "Daily swings <span>1</span>" in h and "dipped and came back" in h
+    assert "Linen Cloth" not in state_html(c, tab="invest")
+
+
+def test_search_finds_items_by_name_and_a_star_keeps_them_on_the_tracked_tab(server):
+    path, base, _ = server
+    c = db.connect(path)
+    at = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    rows = [Row(i, name, None, None, None, None, None, None, ask, None, 40, 1, sold, None)
+            for i, name, ask, sold in ((7, "Wildvine", 196, 400), (8, "Wild Steelbloom", 90, 900), (9, "Linen Cloth", 25, 50))]
+    db.save_scan(c, "alliance", at, at, 0.05, rows)
+    h = req(base + "/?tab=tracked&q=wild")[1]
+    assert h.index("Wild Steelbloom") < h.index("Wildvine") and "Linen Cloth" not in h  # best seller first
+    assert "≈450 sold/day" in h and "Nothing tracked yet" in h and "☆ Track" in h
+    assert "No item with that name" in req(base + "/?tab=tracked&q=zzz")[1]
+    hdr = {"Content-Type": "application/x-www-form-urlencoded", "Referer": base + "/?tab=tracked&q=wild"}
+    assert req(base + "/star", {"item_id": "7"}, hdr)[0] == 303
+    h = req(base + "/?tab=tracked")[1]
+    assert "Wildvine" in h and "★ Tracked" in h and "★ Tracked <span>1</span>" in h and "Steelbloom" not in h
+    req(base + "/star", {"item_id": "7"}, hdr)  # a second press stops tracking
+    assert "Nothing tracked yet" in req(base + "/?tab=tracked")[1]
+    assert req(base + "/star", {"item_id": "x"}, hdr)[0] == 400
