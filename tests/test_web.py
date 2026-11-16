@@ -592,6 +592,7 @@ def test_first_start_asks_for_realm_gold_and_the_risks_before_anything_else(tmp_
         db.set_setting(c, "markets", json.dumps(SITE))
         h = req(base + "/")[1]
         assert "You can lose gold" in h and 'action="/setup"' in h and "Choose…" in h and 'name="agree"' in h
+        assert "Made by Wectoz" in h
         hdr = {"Content-Type": "application/x-www-form-urlencoded"}
         form = {"region": "eu", "realm": "1", "faction": "alliance", "gold": "250"}
         code, h = req(base + "/setup", form, hdr)  # the risks not accepted: nothing is saved
@@ -614,6 +615,7 @@ def test_version_is_shown_and_a_newer_one_on_github_offers_an_update(server, mon
     monkeypatch.setattr(web.webbrowser, "open", opened.append)
     h = req(base + "/")[1]
     assert "WoW Invest v0.2.0" in h and "Update to" not in h
+    assert "Made by Wectoz" in h and "AI was used in the development of this app" in h
     for same_or_odd in ("0.2.0", "0.1.9", "banana"):
         db.set_setting(c, "latest_version", same_or_odd)
         assert "Update to" not in req(base + "/")[1]

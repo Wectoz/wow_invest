@@ -61,6 +61,8 @@ Other things you can do:
 - The listing-deposit rates are a guess. Check them in game.
 - Your gold, realm and other choices are stored only on your PC.
 
+Made by Wectoz. AI was used in the development of this app.
+
 ## For developers
 
 ```

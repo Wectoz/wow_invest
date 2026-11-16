@@ -298,7 +298,8 @@ def welcome_page(markets: list, error: str | None = None, css_href: str = "/stat
             f'<link rel="stylesheet" href="{esc(css_href)}"></head><body><main>{ban}<div class="frame">'
             '<header class="brand"><img src="/static/icon.svg" alt="" width="28" height="28"><h1>Welcome to WoW Invest</h1>'
             '</header><p class="sub">It watches auction house prices and suggests what to buy and sell. It never touches '
-            f'the game: you trade by hand. Tell it where you play and what you have.</p>{body}</div></main></body></html>')
+            f'the game: you trade by hand. Tell it where you play and what you have.</p>{body}</div><div class="sub foot">'
+            'Made by Wectoz · AI was used in the development of this app.</div></main></body></html>')
 
 
 def _realm_form(m: dict) -> str:
