@@ -165,12 +165,13 @@ def test_blackwater_holding_uses_blackwater_price_and_cut():
     assert "below cost" not in sell_html(11000, NOW + timedelta(days=1), house="alliance", cut=0.05)
 
 
-def test_bought_form_visible_on_ranked_and_paper_not_inside_why():
+def test_bought_form_sits_in_the_opened_row_on_ranked_and_paper():
     c = seed(":memory:", [mkpick(1), mkpick(2, kind="hold")])
     h = state_html(c) + state_html(c, tab="invest")  # the buy list, then the multi-day bets
-    assert h.count('action="/bought"') == 2 and h.count("I bought this") == 4  # summary + button each
-    why = h[h.index("<summary>Why</summary>"):]
-    assert 'action="/bought"' not in why[:why.index("</details>")]
+    assert h.count('action="/bought"') == 2 and h.count("I bought this") == 2
+    row = h[h.index('<summary class="row">'):]
+    assert 'action="/bought"' not in row[:row.index("</summary>")]  # the closed row carries no form
+    assert 'action="/bought"' in row[:row.index("</details>")] and 'action="/hide"' in row[:row.index("</details>")]
     assert 'name="sell_at" value="alliance"' in h
 
 
@@ -519,12 +520,12 @@ def test_search_finds_items_by_name_and_a_star_keeps_them_on_the_tracked_tab(ser
     db.save_scan(c, "alliance", at, at, 0.05, rows)
     h = req(base + "/?tab=tracked&q=wild")[1]
     assert h.index("Wild Steelbloom") < h.index("Wildvine") and "Linen Cloth" not in h  # best seller first
-    assert "≈450 sold/day" in h and "Nothing tracked yet" in h and "☆ Track" in h
+    assert "≈450 sold/day" in h and "Nothing tracked yet" in h and "Track this item" in h
     assert "No item with that name" in req(base + "/?tab=tracked&q=zzz")[1]
     hdr = {"Content-Type": "application/x-www-form-urlencoded", "Referer": base + "/?tab=tracked&q=wild"}
     assert req(base + "/star", {"item_id": "7"}, hdr)[0] == 303
     h = req(base + "/?tab=tracked")[1]
-    assert "Wildvine" in h and "★ Tracked" in h and "★ Tracked <span>1</span>" in h and "Steelbloom" not in h
+    assert "Wildvine" in h and "Stop tracking this item" in h and "★ Tracked <span>1</span>" in h and "Steelbloom" not in h
     req(base + "/star", {"item_id": "7"}, hdr)  # a second press stops tracking
     assert "Nothing tracked yet" in req(base + "/?tab=tracked")[1]
     assert req(base + "/star", {"item_id": "x"}, hdr)[0] == 400

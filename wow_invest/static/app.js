@@ -3,7 +3,7 @@
   var v = document.querySelector("main").dataset.v, loaded = Date.now();
   function busy() {
     var a = document.activeElement;
-    return (a && a.tagName === "INPUT") || document.querySelector("details.bought[open], details.skills[open]");
+    return (a && a.tagName === "INPUT") || document.querySelector(".pick details[open], details.filters[open], details.skills[open]");
   }
   setInterval(function () {
     fetch("/version").then(function (r) { return r.text(); }).then(function (now) {

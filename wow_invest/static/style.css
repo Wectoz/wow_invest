@@ -94,3 +94,30 @@ input[type=text], select { background:#000c; }
 .brand { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
 .brand .sub { flex:1; min-width:200px; }
 .stat .v { font-size:16px; } .stat .v .sub { white-space:nowrap; font-size:11px; }
+/* ---- one row per pick: a click opens it; the only button left on the row is the star ---- */
+.pick { display:grid; grid-template-columns:1fr auto; align-items:start; }
+.pick > details, .pick > .row { grid-column:1; padding:0; font-size:inherit; color:inherit; min-width:0; }
+.pick > .row { padding:10px 4px; }
+summary.row { color:inherit; font-size:inherit; list-style:none; }
+summary.row::-webkit-details-marker { display:none; }
+.row > div { min-width:0; }
+.pick details:not([open]) .why { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.more { padding:0 4px 14px 112px; font-size:13px; color:var(--muted); display:flex; flex-direction:column; gap:8px; align-items:flex-start; }
+.more p { margin:0; }
+.more .boughtform { margin:0; color:var(--text); }
+.star button { background:none; border:0; font-size:20px; line-height:1; padding:20px 8px 8px 12px; color:#8a6a3b; min-height:0; }
+.star button:hover, .star button.on { color:var(--gold); }
+.star button:focus { outline:none; }
+button { min-height:30px; }
+form.hide button, .acts form.hide button { font-size:13px; padding:4px 12px; opacity:.7; }
+/* ---- quiet top: search beside the title, the filters behind one line ---- */
+.secthead { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:6px; }
+.secthead .sect { margin:0; }
+.search input[type=text] { width:200px; }
+details.filters { grid-column:auto; padding:0; margin-bottom:8px; }
+details.filters > summary { font-size:13px; }
+details.filters > summary span { color:var(--muted); margin-left:6px; }
+details.filters[open] > summary { margin-bottom:10px; }
+.tab.none { opacity:.45; }
+@media (max-width:640px) { .more { padding-left:4px; } }
+.sect + .pick, .pick + .sect, .empty + .sect { margin-top:14px; }

@@ -247,9 +247,9 @@ def _bought_form(p) -> str:
 
 
 def _star_form(item_id, on) -> str:
-    return (f'<form class="hide" method="post" action="/star"><input type="hidden" name="item_id" value="{esc(item_id)}">'
-            f'<button title="{"Stop tracking this item" if on else "Keep this item on the Tracked tab"}">'
-            f'{"★ Tracked" if on else "☆ Track"}</button></form>')
+    tip = "Stop tracking this item" if on else "Track this item on the ★ Tracked tab"
+    return (f'<form class="star" method="post" action="/star"><input type="hidden" name="item_id" value="{esc(item_id)}">'
+            f'<button{" class=\"on\"" if on else ""} title="{tip}" aria-label="{tip}">{"★" if on else "☆"}</button></form>')
 
 
 def _item_row(v, picks) -> str:
@@ -263,8 +263,7 @@ def _item_row(v, picks) -> str:
     return (f'<div class="pick"><div class="row"><div></div>{_ico(v["icon"], v["quality"])}'
             f'<div><span class="name {_qcls(v["quality"])}">{_name(v["item_id"], v["name"])}</span>{tags}'
             f'<div class="why">{v["units"]} listed · ≈{v["sold"] // 2} sold/day (estimate)</div></div>'
-            f'<div class="nums">{price}{moved}</div></div>'
-            f'<div class="acts">{_star_form(v["item_id"], v["starred"])}</div></div>')
+            f'<div class="nums">{price}{moved}</div></div>{_star_form(v["item_id"], v["starred"])}</div>')
 
 
 def _pick_row(p, rank=None, form=True, dim=False, starred=False) -> str:
@@ -276,18 +275,18 @@ def _pick_row(p, rank=None, form=True, dim=False, starred=False) -> str:
             f'<span class="profit">+{fmt_money(p.profit)}</span> · ~{p.days:.1f} days · sure '
             f'<span class="conf"><i style="width:{int(p.sure * 100)}%"></i></span>')
     trend = "trend unknown" if p.trend is None else f"price {p.trend * 100:+.0f}% vs a day ago"
-    body = (f'<div class="acts"><details><summary>Why</summary><p>{esc(p.reason)}</p>'
-            f'<p>≈{p.spd:.0f} sold/day (estimate) · {p.listed} listed on the sell AH · {trend}'
-            f' · {p.depth} listed just above your price</p>{sb}</details>'
-            + (f'<details class="bought"><summary>I bought this</summary>{_bought_form(p)}</details>' if form else "")
+    # one quiet row; a click opens it for the full reason, the numbers behind it and the buttons
+    more = (f'<div class="more"><p>≈{p.spd:.0f} sold/day (estimate) · {p.listed} listed on the sell AH · {trend}'
+            f' · {p.depth} listed just above your price</p>{sb}'
+            + (_bought_form(p) if form else "")
             + f'<form class="hide" method="post" action="/hide"><input type="hidden" name="item_id" value="{esc(p.item_id)}">'
-              '<button title="Never suggest this item again">Hide</button></form>'
-            + _star_form(p.item_id, starred) + '</div>')
+              '<button title="Never suggest this item again">Hide this item</button></form></div>')
     rk = f'<div class="rank">{rank}</div>' if rank else "<div></div>"
-    return (f'<div class="pick{unf}"><div class="row">{rk}{_ico(p.icon, p.quality)}'
+    return (f'<div class="pick{unf}"><details><summary class="row">{rk}{_ico(p.icon, p.quality)}'
             f'<div><span class="name {_qcls(p.quality)}">{_name(p.item_id, p.name)}</span>'
             f'<span class="tag {tcls}">{esc(label)}</span><span class="tag">{esc(route(p))}</span>{note}'
-            f'<div class="why">{esc(p.reason)}</div></div><div class="nums">{side}</div></div>{body}</div>')
+            f'<div class="why">{esc(p.reason)}</div></div><div class="nums">{side}</div></summary>{more}</details>'
+            f'{_star_form(p.item_id, starred)}</div>')
 
 
 def _held_row(v) -> str:
@@ -381,7 +380,11 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
               if state["hidden"] else "")
     types = "".join(f'<option value="{k}"{" selected" if k == state["type"] else ""}>{esc(v[0])}</option>'
                     for k, v in TYPES.items())
-    controls = (f'<div class="controls"><form method="post" action="/type"><label>Show <select name="type" data-auto>'
+    cut = by_floor + by_type + state["hidden"]
+    told = " · ".join(([TYPES[state["type"]][0]] if state["type"] in TYPES else []) + [SORTS[sort][0]]
+                      + ([f"{cut} picks hidden"] if cut > 0 else []))
+    controls = (f'<details class="filters"><summary>Filters <span>{esc(told)}</span></summary>'
+                f'<div class="controls"><form method="post" action="/type"><label>Show <select name="type" data-auto>'
                 f'<option value="">All item types</option>{types}</select></label><button>Show</button></form>'
                 f'<form method="post" action="/sort">Sort: {sorts}</form>'
                 f'<form method="post" action="/min-profit"><label>Smallest profit worth showing <input type="text" '
@@ -392,6 +395,7 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
                    if by_floor > 0 else "")
                 + (f'<div class="sub filtered">{by_type} more picks are hidden because only '
                    f'{esc(TYPES[state["type"]][0])} is shown.</div>' if by_type > 0 else "")
+                + '</details>'
                 + ('<div class="sub">Multi-day bets on price moves, not proven yet: the program does not spend your gold '
                    'on them, but you can buy and track them. Holds wait out a flood, forecasts bet on items the crowd '
                    'has levelled past, rising prices bet that a day-long climb continues. Price held at target — holds: '
@@ -408,9 +412,9 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
                    'so the program does not spend your gold on them. Price came back to target: '
                    f'{esc(_rate(st["swing_hits"], st["swing_judged"]))}</div>' if tab == "swing" else ""))
     w = state["watch"]
-    search = ('<form class="controls" method="get" action="/"><input type="hidden" name="tab" value="tracked">'
-              f'<input type="text" name="q" value="{esc(w["q"])}" placeholder="Search items" aria-label="Search items">'
-              '<button>Search</button></form>')
+    search = ('<form class="search" method="get" action="/"><input type="hidden" name="tab" value="tracked">'
+              f'<input type="text" name="q" value="{esc(w["q"])}" placeholder="Search items…" aria-label="Search items">'
+              '</form>')  # one box: Enter searches
     if tab == "tracked":
         on = {}
         for x in p.ranked + p.paper:
@@ -419,14 +423,15 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
         buy = ((f'<div class="sect">Found for “{esc(w["q"])}”</div>'
                 + _rows(w["found"], "No item with that name.", lambda v, n: _item_row(v, on))
                 + '<div class="sect">Tracked</div>' if len(w["q"]) >= 2 else "")
-               + _rows(w["starred"], "Nothing tracked yet. Search for an item, or press ☆ Track on a pick.",
+               + _rows(w["starred"], "Nothing tracked yet. Search for an item, or press ☆ on a pick.",
                        lambda v, n: _item_row(v, on)))
     else:
         buy = _rows(shown, "Nothing worth buying right now.",
                     lambda x, n: _pick_row(x, n, dim=x.kind in funded_kinds, starred=x.item_id in w["ids"]))
+    count = lambda k: len(w["starred"]) if k == "tracked" else len(in_tab(k))
     tabs = "".join(
-        f'<a class="tab{" on" if k == tab else ""}" href="/?tab={k}">{esc(label)} '
-        f'<span>{len(w["starred"]) if k == "tracked" else len(in_tab(k))}</span></a>'
+        f'<a class="tab{" on" if k == tab else "" if count(k) else " none"}" href="/?tab={k}">{esc(label)} '
+        f'<span>{count(k)}</span></a>'
         for k, (label, kinds) in TABS.items())
     ban = []
     if error:
@@ -452,7 +457,7 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     return Template((HERE / "page.html").read_text(encoding="utf-8")).substitute(
         css_href=esc(css_href), banners="".join(ban), here=f"/?tab={tab}",
         version=esc(_version(state)),
-        tabs=f'<nav class="tabs">{tabs}</nav>' + search + controls + (_profession_bar(state["professions"]) + _skills_form(state["skills"]) if tab == "craft" else "")
+        search=search, tabs=f'<nav class="tabs">{tabs}</nav>' + controls + (_profession_bar(state["professions"]) + _skills_form(state["skills"]) if tab == "craft" else "")
         + (_rep_form(state["rep"]) if tab == "vendor" else ""), reload_s=5 if state["scanning"] else 300,
         refresh_off=" disabled" if state["scanning"] else "",
         sub=f'Alliance · Normal (PvE) · EU — {esc(" + ".join(HOUSE[h] for h in C.SCAN_HOUSES))} — {esc(age)}{esc(nxt)}',
