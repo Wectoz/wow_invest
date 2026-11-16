@@ -299,6 +299,8 @@ def test_buyout_refused_when_the_shelf_is_too_big_to_resell_in_time():
     shelf(hist=((h, 300, 40000 if 70 <= h < 73 else 20000, 0, 4) for h in range(3, 96))),
     shelf(last=((h, 600, 12000, 0, 4) for h in range(24))),  # flooded: twice the usual amount listed
     shelf(last=((0, 300, 12000, 0, 4), (1, 300, 13000, 0, 4), (2, 300, 14000, 0, 4))),  # still falling
+    # fell to 13000 a day ago and stayed there: 20000 is an old price, not one to relist at
+    shelf(hist=((h, 300, 13000 if h < 24 else 20000, 0, 4) for h in range(3, 96))),
     shelf(last=((h, 300, 12000, 0, 1) for h in range(24)), hist=((h, 300, 20000, 0, 4) for h in range(24, 96))),  # sales fading
 ])
 def test_buyout_refused_when_history_does_not_back_it(series):

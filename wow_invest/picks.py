@@ -215,8 +215,12 @@ def buyout(row, d, held, now):
     no flood of listings, steady sales and a cheapest price that has stopped falling."""
     s = d.series
     hours, usual = history_hours(s, now), held_price(s, now)
-    if hours < c.BUYOUT_MIN_HISTORY_H or usual is None or failed_resets(s, now):
+    going = going_price(s, now)
+    # the held price is only an old price once the market has slid under it: the last day must back it too
+    if (hours < c.BUYOUT_MIN_HISTORY_H or usual is None or failed_resets(s, now)
+            or going is None or going < (1 + c.FALLING) * usual):
         return None
+    usual = min(usual, going)  # never relist above what it really went for over the last day
     normal = window_median(s, now, 0, hours + 1, "units")
     tail = [p.min_ask for p in sorted(s, key=lambda p: p.at) if p.min_ask is not None and p.at <= now][-3:]
     spd = sales_per_day(s, now)
