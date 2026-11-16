@@ -421,12 +421,24 @@ def test_craft_pick_prices_reagents_from_the_ah_and_the_vendor(monkeypatch):
     assert run_cycle(fc, conn, NOW, force=True) == "done"
     assert [p for p in db.load_candidates(conn)[0] if p.kind == "craft"] == []
     db.set_setting(conn, "skills", "{}")
-    db.set_setting(conn, "professions", '["Cooking"]')  # not the profession that makes it
-    assert run_cycle(fc, conn, NOW, force=True) == "done"
-    assert [p for p in db.load_candidates(conn)[0] if p.kind == "craft"] == []
-    db.set_setting(conn, "professions", '["Tailoring"]')
-    assert run_cycle(fc, conn, NOW, force=True) == "done"
-    assert [p.profession for p in db.load_candidates(conn)[0] if p.kind == "craft"] == ["Tailoring"]
+    # the profession shown on the page decides who gets the big quota, never whether a profession is priced:
+    # switching the list must show picks without another scan
+    for shown in ('["Cooking"]', '["Tailoring"]'):
+        db.set_setting(conn, "professions", shown)
+        assert run_cycle(fc, conn, NOW, force=True) == "done"
+        assert [p.profession for p in db.load_candidates(conn)[0] if p.kind == "craft"] == ["Tailoring"]
+
+
+def test_every_profession_keeps_its_best_few_recipes_beside_the_chosen_ones(monkeypatch):
+    conn = db.connect(":memory:")
+    monkeypatch.setattr(config, "CRAFT_QUOTA", 3)
+    monkeypatch.setattr(config, "CRAFT_PER_PROFESSION", 1)
+    # products 1-4 are Cooking, 5-8 Tailoring; each is made from one unit of reagent 99; a dearer product earns more
+    monkeypatch.setattr(scanner, "RECIPES", [(i, "Cooking" if i <= 4 else "Tailoring", 1, 1, ((99, 1),)) for i in range(1, 9)])
+    a = {i: row(i, min_ask=1000 * i + 5000) for i in range(1, 9)} | {99: row(99, min_ask=100)}
+    made = lambda chosen: [(r[0], r[1]) for r, _ in scanner._crafts(conn, a, 0.05, {}, chosen)]
+    assert made(set()) == [(8, "Tailoring"), (7, "Tailoring"), (6, "Tailoring"), (4, "Cooking")]
+    assert made({"Cooking"}) == [(4, "Cooking"), (3, "Cooking"), (2, "Cooking"), (8, "Tailoring")]
 
 
 def test_strong_new_pick_notifies_but_not_on_the_first_scan_or_again(monkeypatch):

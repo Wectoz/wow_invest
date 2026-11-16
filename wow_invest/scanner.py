@@ -191,13 +191,15 @@ def _vendor_unit(conn, item_id) -> int | None:
 
 def _crafts(conn, a, cut, skills, chosen):
     """The most promising recipes on list prices, one per product: [(recipe, product row)].
-    `skills` is {profession: skill} and `chosen` the professions to look at; empty means no limit."""
+    `skills` is {profession: skill}. `chosen` are the professions shown on the page: they get the big quota
+    (every profession does when it is empty), and each profession keeps its best few either way, so
+    switching the profession on the page shows picks without waiting for another scan."""
     best = {}
     for recipe in RECIPES:
         item, prof, skill, made, mats = recipe
         r = a.get(item)
         if (r is None or item in CRAFT_SKIP or 0.5 * r.sold_24h < c.MIN_SALES_PER_DAY
-                or (chosen and prof not in chosen) or (prof in skills and skills[prof] < skill)
+                or (prof in skills and skills[prof] < skill)
                 or (prof == "Alchemy" and r.class_name != "Consumable")):  # transmutes are on a cooldown
             continue
         prices = [_vendor_unit(conn, i) or (a[i].min_ask if i in a else None) for i, _ in mats]
@@ -207,7 +209,14 @@ def _crafts(conn, a, cut, skills, chosen):
         worth = margin * min(0.5 * r.sold_24h, 200)
         if margin > 0 and worth > best.get(item, (0,))[0]:
             best[item] = (worth, recipe, r)
-    return [(recipe, r) for _, recipe, r in sorted(best.values(), key=lambda x: -x[0])[:c.CRAFT_QUOTA]]
+    ranked = sorted(best.values(), key=lambda x: -x[0])
+    main = [x for x in ranked if not chosen or x[1][1] in chosen][:c.CRAFT_QUOTA]
+    seen, few = {}, []
+    for x in ranked:  # the best few of each profession
+        seen[x[1][1]] = seen.get(x[1][1], 0) + 1
+        if seen[x[1][1]] <= c.CRAFT_PER_PROFESSION and x not in main:
+            few.append(x)
+    return [(recipe, r) for _, recipe, r in main + few]
 
 
 def run_cycle(client, conn, now, force=False) -> str:

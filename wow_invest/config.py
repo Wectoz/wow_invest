@@ -52,6 +52,7 @@ CROWD_DRIFT_PRIOR = 0.5  # levels a day the crowd climbs, until a day of our own
 CROWD_DRIFT_MAX = 3.0
 NOTIFY_PROFIT = 10000  # a new pick worth at least this much raises a desktop notification
 CRAFT_QUOTA = 25  # recipes priced in full each cycle (the product and every reagent get a detail request)
+CRAFT_PER_PROFESSION = 4  # and the best few of every profession on top, so none is left without picks
 CRAFT_MAX_UNITS = 2000
 RISE_DAYS = 7  # forecast horizon
 RISE_GAIN = 0.15  # price rise a forecast pick bets on
