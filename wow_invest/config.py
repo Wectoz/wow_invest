@@ -1,7 +1,15 @@
 """Every constant and threshold. Money is integer copper (1g = 10000)."""
 
 BASE_URL = "https://blackwater.exchange"
-HOUSES = {"alliance": "eu/2/111", "blackwater": "eu/2/117"}
+# The player's realm is their own setting (region/realm type/faction), kept in their database. Inside the
+# program the player's own house is always called "alliance" and the neutral one "blackwater": names from
+# when it knew a single realm. HOUSES and HOUSE_NAMES are pointed at the chosen realm when a scan starts.
+MARKET_DEFAULT = "eu/1/alliance"  # the first realm the site lists, until the player picks theirs
+HOUSES = {"alliance": "eu/1/110", "blackwater": "eu/1/116"}
+HOUSE_NAMES = {"alliance": "Alliance", "blackwater": "Blackwater"}
+FACTIONS = ("alliance", "horde", "blackwater")  # a realm's three houses, in the order of the site's house ids
+REGIONS = {"eu": "EU", "us": "US", "kr": "Korea", "tw": "Taiwan"}
+COMPARE_PER_CYCLE = 5  # tracked items whose price on every other realm is looked up each scan (12 requests each)
 SCAN_HOUSES = ("alliance",)  # add "blackwater" to scan the neutral AH and get cross-AH flips back
 USER_AGENT = "ah-helper/0.1"
 REQUEST_GAP_S = 1.0

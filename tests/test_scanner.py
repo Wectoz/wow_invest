@@ -1,3 +1,4 @@
+import json
 import logging
 import sqlite3
 import threading
@@ -39,9 +40,12 @@ class FakeClient:
         self.rows = {"alliance": list(alliance), "blackwater": list(blackwater)}
         self.deal_ids, self.details, self.fail, self.gone = list(deals), details or {}, set(fail), set(gone)
         self.times = {h: (NOW.isoformat(), NOW.isoformat()) for h in CUT}
-        self.calls, self.fetched = Counter(), []
+        self.calls, self.fetched, self.site = Counter(), [], []
 
-    def scan_times(self):
+    def markets(self):
+        return self.site
+
+    def scan_times(self, markets=None):
         self.calls["scan_times"] += 1
         if "scan_times" in self.fail:
             raise ApiError("markets")
@@ -487,3 +491,22 @@ def test_a_fast_seller_in_its_daily_dip_is_a_swing_candidate():
     (p,) = db.load_candidates(conn)[0]
     assert (p.kind, p.qty, p.sell_price) == ("swing", 10, 19999)
     assert planner.plan([p], 10**9, [], True).ranked == []  # a bet: shown on its own tab, never funded
+
+
+def test_scan_follows_the_players_realm_and_compares_tracked_items_across_realms():
+    conn = db.connect(":memory:")
+    db.set_setting(conn, "market", "us/2/horde")
+    db.set_setting(conn, "starred", f"[{FLIP}]")
+    fc = flip_client()
+    fc.site = [{"region": r, "ruleset_id": rs, "house_id": h, "name": ""} for r in ("eu", "us")
+               for rs, hs in ((1, (110, 113, 116)), (2, (111, 114, 117))) for h in hs]
+    fc.details[("eu/1/113", FLIP)] = detail(FLIP, ladder=WALL)
+    assert run_cycle(fc, conn, NOW) == "done"
+    assert fc.houses == {"alliance": "us/2/114", "blackwater": "us/2/117"}  # the Horde and neutral houses there
+    assert config.HOUSE_NAMES["alliance"] == "Horde"
+    assert not [p for p in db.load_candidates(conn)[0] if p.kind == "vendor"]
+    rows = json.loads(db.get_setting(conn, "compare"))[str(FLIP)]["rows"]
+    # the Horde house of every realm: 12000 at the cheapest, 115 listed, 48 sold a day; nothing listed elsewhere
+    assert rows == [["eu", 1, 12000, 115, 48], ["eu", 2, None, 0, 0], ["us", 1, None, 0, 0], ["us", 2, None, 0, 0]]
+    fc.fail.add(FLIP)  # the site struggling later keeps what was learned
+    assert run_cycle(fc, conn, NOW, force=True) == "error" or json.loads(db.get_setting(conn, "compare"))[str(FLIP)]["rows"] == rows

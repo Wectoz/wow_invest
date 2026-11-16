@@ -130,13 +130,14 @@ def _watch(conn, now, q: str) -> dict:
            WHERE instr(lower(i.name), ?) ORDER BY coalesce(s.sold_24h, -1) DESC, i.name LIMIT ?""",
         (q, SEARCH_MAX))] if len(q) >= 2 else []
     cur, old = db.rows_at(conn, "alliance", 0, now), db.rows_at(conn, "alliance", 24, now)
+    across = json.loads(db.get_setting(conn, "compare", "{}"))
 
     def item(i):
         it = db.static(conn, i)
         ask, units, sold = cur.get(i, (None, 0, 0))
         return {"item_id": i, "name": it["name"] if it else None, "icon": it["icon"] if it else None,
                 "quality": it["quality"] if it else None, "ask": ask, "units": units, "sold": sold,
-                "old": old.get(i, (None,))[0], "starred": i in ids}
+                "old": old.get(i, (None,))[0], "starred": i in ids, "across": across.get(str(i))}
     return {"q": q, "ids": set(ids), "found": [item(i) for i in found], "starred": [item(i) for i in ids]}
 
 
@@ -146,7 +147,15 @@ def _star(conn, f, now):
     db.set_setting(conn, "starred", json.dumps([x for x in ids if x != i] if i in ids else ids + [i]))
 
 
+def _market(conn) -> dict:
+    scanner.use_market(conn)  # the house names in every label follow the player's faction
+    ms, main = scanner.known_markets(conn), scanner.market(conn)
+    return {"markets": ms, "main": main,
+            "label": f"{main[2].title()} · {_realm_name(ms, main[1])} · {C.REGIONS.get(main[0], main[0].upper())}"}
+
+
 def build_state(conn, now: datetime, q: str = "") -> dict:
+    mk = _market(conn)
     cands, captured = db.load_candidates(conn)
     holdings = db.open_holdings(conn)
     # the scan already capped for holdings bought before it; one bought since makes its pick out of date
@@ -201,20 +210,58 @@ def build_state(conn, now: datetime, q: str = "") -> dict:
         "auctions_at": auctions, "data_age_min": int((now - auctions).total_seconds() // 60) if auctions else None,
         # scans run hourly (the site's cadence), so the next one is expected an hour after the last
         "next_scan": last_ok + timedelta(hours=1) if last_ok else None,
-        "now": now, "watch": _watch(conn, now, q),
+        "now": now, "watch": _watch(conn, now, q), "market": mk,
     }
 
 
-HOUSE = {"alliance": "Alliance AH", "blackwater": "Blackwater AH"}
+def _house(h) -> str:
+    return f"{C.HOUSE_NAMES.get(h, h.title())} AH"
+
+
+def _realm_name(markets, ruleset) -> str:
+    """The realm type's name, as the site writes it after the house: "Alliance Auction House · Normal (PvE)"."""
+    names = [m[3].split(" · ", 1)[1] for m in markets if m[1] == ruleset and " · " in m[3]]
+    return names[0].replace(" (provisional)", "") if names else f"Realm type {ruleset}"
+
+
+def _set_realm(conn, f, now):
+    ms = scanner.known_markets(conn)
+    region, faction = f.get("region"), f.get("faction")
+    ruleset = _int(f.get("realm"), "Realm", 0, 10**6)
+    if faction not in C.FACTIONS[:2] or not scanner.houses_of(ms, region, ruleset):
+        raise ValueError("The price site does not cover that realm")
+    new = f"{region}/{ruleset}/{faction}"
+    if new == db.get_setting(conn, "market", C.MARKET_DEFAULT):
+        return
+    db.clear_market(conn)
+    db.set_setting(conn, "market", new)
+    _refresh(conn, f, now)
+
+
+def _realm_form(m: dict) -> str:
+    """Region, realm type and faction of the player's main realm; the lists come from what the site covers."""
+    ms, (region, ruleset, faction) = m["markets"], m["main"]
+    opt = lambda v, label, on: f'<option value="{esc(v)}"{" selected" if on else ""}>{esc(label)}</option>'
+    regions = "".join(opt(r, C.REGIONS.get(r, r.upper()), r == region) for r in sorted({x[0] for x in ms}))
+    realms = "".join(opt(rs, _realm_name(ms, rs), rs == ruleset) for rs in sorted({x[1] for x in ms}))
+    factions = "".join(opt(x, x.title(), x == faction) for x in C.FACTIONS[:2])
+    if not ms:
+        return ""
+    return ('<details class="filters realm"><summary>Change realm</summary><form class="controls" method="post" '
+            f'action="/realm"><label>Region <select name="region">{regions}</select></label><label>Realm '
+            f'<select name="realm">{realms}</select></label><label>Faction <select name="faction">{factions}</select>'
+            '</label><button>Make this my main realm</button></form><div class="sub">Picks, prices and scans follow '
+            'your main realm. Changing it clears the price history gathered so far, and new picks need a scan (a few '
+            'minutes). Your holdings and settings stay.</div></details>')
 
 
 def route(p) -> str:
     if p.kind == "cross":
-        a, b = (x.capitalize() for x in (p.buy_at, p.sell_at))
+        a, b = (C.HOUSE_NAMES.get(x, x.capitalize()) for x in (p.buy_at, p.sell_at))
         return f"{a} → {b}"
     if p.kind in ("vendor", "craft"):
-        return f"{p.kind.capitalize()} → {HOUSE.get(p.sell_at, p.sell_at)}"
-    return HOUSE.get(p.sell_at, p.sell_at)
+        return f"{p.kind.capitalize()} → {_house(p.sell_at)}"
+    return _house(p.sell_at)
 
 
 def _name(item_id, name) -> str:
@@ -252,18 +299,40 @@ def _star_form(item_id, on) -> str:
             f'<button{" class=\"on\"" if on else ""} title="{tip}" aria-label="{tip}">{"★" if on else "☆"}</button></form>')
 
 
-def _item_row(v, picks) -> str:
-    """A tracked or found item: what it costs and how it sells now, and any pick on it."""
+def _across(v, mk) -> str:
+    """A tracked item's price on the player's faction house of every realm, cheapest first."""
+    a = v["across"]
+    if not a:
+        return ('<div class="more"><p>Its prices on the other realms arrive with the next scan '
+                f'({C.COMPARE_PER_CYCLE} tracked items at a time).</p></div>')
+    lines = ""
+    for reg, rs, ask, units, spd in sorted(a["rows"], key=lambda r: (r[2] is None, r[2] or 0)):
+        mine = ' <span class="tag">your realm</span>' if (reg, rs) == mk["main"][:2] else ""
+        nums = (f'<td>{fmt_money(ask)}</td><td>{units} listed</td><td>≈{spd} sold/day</td>' if ask is not None
+                else '<td colspan="3">not listed</td>')
+        lines += (f'<tr><td>{esc(C.REGIONS.get(reg, reg.upper()))} · {esc(_realm_name(mk["markets"], rs))}{mine}</td>'
+                  f'{nums}</tr>')
+    return (f'<div class="more"><p>{esc(_house("alliance"))} on every realm, cheapest first · checked '
+            f'{_hm(_aware(a["at"]))}. Gold is worth more or less on each realm, so compare with care.</p>'
+            f'<table class="cmp">{lines}</table></div>')
+
+
+def _item_row(v, picks, mk) -> str:
+    """A tracked or found item: what it costs and how it sells now, and any pick on it. A tracked one
+    opens to its price on every realm."""
     tags = "".join(f'<span class="tag">{esc(k)} pick</span>' for k in picks.get(v["item_id"], ()))
     if v["ask"] is None:
         price, moved = "not listed now", ""
     else:
         price = fmt_money(v["ask"])
         moved = f'<br>{v["ask"] / v["old"] - 1:+.0%} vs a day ago' if v["old"] else ""
-    return (f'<div class="pick"><div class="row"><div></div>{_ico(v["icon"], v["quality"])}'
-            f'<div><span class="name {_qcls(v["quality"])}">{_name(v["item_id"], v["name"])}</span>{tags}'
-            f'<div class="why">{v["units"]} listed · ≈{v["sold"] // 2} sold/day (estimate)</div></div>'
-            f'<div class="nums">{price}{moved}</div></div>{_star_form(v["item_id"], v["starred"])}</div>')
+    row = (f'<div></div>{_ico(v["icon"], v["quality"])}'
+           f'<div><span class="name {_qcls(v["quality"])}">{_name(v["item_id"], v["name"])}</span>{tags}'
+           f'<div class="why">{v["units"]} listed · ≈{v["sold"] // 2} sold/day (estimate)</div></div>'
+           f'<div class="nums">{price}{moved}</div>')
+    body = (f'<details><summary class="row">{row}</summary>{_across(v, mk)}</details>' if v["starred"]
+            else f'<div class="row">{row}</div>')
+    return f'<div class="pick">{body}{_star_form(v["item_id"], v["starred"])}</div>'
 
 
 def _pick_row(p, rank=None, form=True, dim=False, starred=False) -> str:
@@ -308,7 +377,7 @@ def _held_row(v) -> str:
     sb = f' · sell by {_dhm(h.sell_by)}' if h.sell_by else ""
     return (f'<div class="held"><div class="row"><div></div>{_ico(v["icon"], v["quality"])}'
             f'<div><span class="name {_qcls(v["quality"])}">{_name(h.item_id, v["name"])}</span>'
-            f'<span class="tag">{esc(KINDS.get(h.kind, (h.kind,))[0])}</span><span class="tag">{esc(HOUSE.get(h.sell_at, h.sell_at))}</span>'
+            f'<span class="tag">{esc(KINDS.get(h.kind, (h.kind,))[0])}</span><span class="tag">{esc(_house(h.sell_at))}</span>'
             f'<div class="why">{h.qty} × paid {fmt_money(h.price_paid // h.qty)}, target {fmt_money(h.target)}{sb}</div></div>'
             f'<div class="nums">{adv}<br><form class="inline" method="post" action="/sold">'
             f'<input type="hidden" name="holding_id" value="{esc(h.id)}"><label>for <input type="text" name="price" '
@@ -411,7 +480,7 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
                    'Refused when the highs are sinking or when less sells in a day than is listed. Not proven yet, '
                    'so the program does not spend your gold on them. Price came back to target: '
                    f'{esc(_rate(st["swing_hits"], st["swing_judged"]))}</div>' if tab == "swing" else ""))
-    w = state["watch"]
+    w, mk = state["watch"], state["market"]
     search = ('<form class="search" method="get" action="/"><input type="hidden" name="tab" value="tracked">'
               f'<input type="text" name="q" value="{esc(w["q"])}" placeholder="Search items…" aria-label="Search items">'
               '</form>')  # one box: Enter searches
@@ -421,10 +490,10 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
             on.setdefault(x.item_id, []).append(KINDS.get(x.kind, (x.kind,))[0])
         controls = ""  # the pick filters do not apply to this list
         buy = ((f'<div class="sect">Found for “{esc(w["q"])}”</div>'
-                + _rows(w["found"], "No item with that name.", lambda v, n: _item_row(v, on))
+                + _rows(w["found"], "No item with that name.", lambda v, n: _item_row(v, on, mk))
                 + '<div class="sect">Tracked</div>' if len(w["q"]) >= 2 else "")
                + _rows(w["starred"], "Nothing tracked yet. Search for an item, or press ☆ on a pick.",
-                       lambda v, n: _item_row(v, on)))
+                       lambda v, n: _item_row(v, on, mk)))
     else:
         buy = _rows(shown, "Nothing worth buying right now.",
                     lambda x, n: _pick_row(x, n, dim=x.kind in funded_kinds, starred=x.item_id in w["ids"]))
@@ -460,7 +529,8 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
         search=search, tabs=f'<nav class="tabs">{tabs}</nav>' + controls + (_profession_bar(state["professions"]) + _skills_form(state["skills"]) if tab == "craft" else "")
         + (_rep_form(state["rep"]) if tab == "vendor" else ""), reload_s=5 if state["scanning"] else 300,
         refresh_off=" disabled" if state["scanning"] else "",
-        sub=f'Alliance · Normal (PvE) · EU — {esc(" + ".join(HOUSE[h] for h in C.SCAN_HOUSES))} — {esc(age)}{esc(nxt)}',
+        sub=f'{esc(mk["label"])} — {esc(" + ".join(_house(h) for h in C.SCAN_HOUSES))} — {esc(age)}{esc(nxt)}',
+        realm=_realm_form(mk),
         gold_text=esc(plain_gold(state["gold"])), spend=fmt_money(p.spend), profit=fmt_money(p.profit),
         crowd=(f'lvl {esc(state["crowd"])}' + (f' <span class="sub">+{esc(state["drift"])} lvl/day</span>'
                                                  if state["drift"] else "")) if state["crowd"] else "unknown",
@@ -574,6 +644,7 @@ ROUTES = {
     "/type": _pick_type,
     "/hide": _hide,
     "/star": _star,
+    "/realm": _set_realm,
     "/unhide": lambda c, f, now: db.set_setting(c, "hidden", "[]"),
     "/sort": _sort,
     "/min-profit": _floors,

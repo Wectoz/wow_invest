@@ -11,6 +11,7 @@ from . import db, planner, tracker
 from .api import ApiError, Client, ShapeError
 from .crowd import estimate_crowd, item_band, overlaps
 from .picks import buyout, craft_flip, cross_flip, hold, quick_flip, rise, swing, trend, vendor_flip
+from .pricing import sales_per_day
 from .tables import CRAFT_SKIP, RECIPES, VENDOR_ITEMS, vendor_unit
 
 HOUSES = c.SCAN_HOUSES
@@ -26,6 +27,70 @@ _PRICED_FIRST = {i for i, stock in VENDOR_ITEMS.items() if stock is None} | {i f
 
 class _Outage(Exception):
     """MAX_ERRORS_IN_ROW requests failed in a row."""
+
+
+def market(conn) -> tuple[str, int, str]:
+    """The player's realm: (region, realm type id, faction)."""
+    region, ruleset, faction = db.get_setting(conn, "market", c.MARKET_DEFAULT).split("/")
+    return region, int(ruleset), faction
+
+
+def known_markets(conn) -> list:
+    """The site's auction houses as [region, realm type id, house id, name], from the last scan that reached it."""
+    return json.loads(db.get_setting(conn, "markets", "[]"))
+
+
+def houses_of(markets, region, ruleset) -> dict[str, str]:
+    """{faction: market key} for the three houses of one realm."""
+    ids = sorted(m[2] for m in markets if (m[0], m[1]) == (region, ruleset))
+    return {f: f"{region}/{ruleset}/{i}" for f, i in zip(c.FACTIONS, ids)} if len(ids) == len(c.FACTIONS) else {}
+
+
+def use_market(conn, client=None):
+    """Point the program at the player's realm; with a client, also learn the site's realms and point it there.
+    Returns the site's raw market list, or None without a client."""
+    region, ruleset, faction = market(conn)
+    c.HOUSE_NAMES["alliance"] = faction.title()
+    if client is None:
+        return None
+    raw = client.markets()
+    if raw:
+        db.set_setting(conn, "markets", json.dumps([[m["region"], m["ruleset_id"], m["house_id"], m.get("name") or ""]
+                                                     for m in raw]))
+    h = houses_of(known_markets(conn), region, ruleset)
+    if h:
+        client.houses = {"alliance": h[faction], "blackwater": h["blackwater"]}
+    return raw
+
+
+def compare(client, conn, now, only_new=False):
+    """Price of a few tracked items on the player's faction house of every realm, the longest unchecked first.
+    `only_new` looks up just the items never compared yet, so a fresh star does not wait for the next scan."""
+    region, ruleset, faction = market(conn)
+    ms = known_markets(conn)
+    seen = json.loads(db.get_setting(conn, "compare", "{}"))
+    starred = [str(i) for i in json.loads(db.get_setting(conn, "starred", "[]"))]
+    seen = {i: v for i, v in seen.items() if i in starred}
+    todo = [i for i in starred if i not in seen] if only_new else sorted(starred, key=lambda i: seen.get(i, {"at": ""})["at"])
+    for i in todo[:c.COMPARE_PER_CYCLE]:
+        rows = []
+        for reg, rs in sorted({(m[0], m[1]) for m in ms}):
+            key = houses_of(ms, reg, rs).get(faction)
+            try:
+                d = client.item_detail(key, int(i), 0) if key else None
+            except ApiError as e:
+                if isinstance(e, ShapeError):  # the site changed its format: say so, do not call it "not listed"
+                    raise
+                if e.transient:  # the site is struggling: keep what we have and try again next scan
+                    db.set_setting(conn, "compare", json.dumps(seen))
+                    return
+                d = None  # not listed there
+            if d is not None and d.ladder:
+                rows.append([reg, rs, d.ladder[0][0], sum(u for _, u in d.ladder), round(sales_per_day(d.series, now))])
+            else:
+                rows.append([reg, rs, None, 0, 0])
+        seen[i] = {"at": now.isoformat(), "rows": rows}
+    db.set_setting(conn, "compare", json.dumps(seen))
 
 
 def _choose(conn, rows, deal_ids, crowd, now):
@@ -145,7 +210,7 @@ def _crafts(conn, a, cut, skills, chosen):
 
 def run_cycle(client, conn, now, force=False) -> str:
     try:
-        times = client.scan_times()
+        times = client.scan_times(use_market(conn, client))
         # a list, not a lazy any(), so both houses are checked: a missing house (KeyError) or a missing,
         # malformed or naive auctions_at costs this one request, not both lists
         stale = any([datetime.fromisoformat(times[h][1]) < now - timedelta(hours=c.STALE_HOURS) for h in HOUSES])
@@ -153,6 +218,10 @@ def run_cycle(client, conn, now, force=False) -> str:
         log.warning("scan failed reading the scan times: %r", e)
         return "error"
     if not force and all(times[h][0] == db.last_captured(conn, h) for h in HOUSES):
+        try:
+            compare(client, conn, now, only_new=True)
+        except Exception:
+            log.exception("comparing tracked items across realms failed")
         return "no-change"
     try:
         rows = {h: client.all_items(h) for h in HOUSES}
@@ -213,7 +282,9 @@ def run_cycle(client, conn, now, force=False) -> str:
             try:
                 new = [cross_flip(r, buy, sell, h, now)] if kind == "cross" else []
                 if house == "alliance":  # every builder that sells on Alliance: never hide a buy
-                    new += [quick_flip(r, sell, h, now), vendor_flip(r, sell, h, now, _rep(conn)),
+                    # the vendor table names Alliance vendors and cities: no vendor picks for a Horde player
+                    new += [quick_flip(r, sell, h, now),
+                            vendor_flip(r, sell, h, now, _rep(conn)) if market(conn)[2] == "alliance" else None,
                             hold(r, sell, crowd, h, now), rise(r, sell, _behind(r, crowd), h, now),
                             trend(r, sell, h, now), buyout(r, sell, h, now), swing(r, sell, h, now)]
             except Exception:
@@ -254,6 +325,10 @@ def run_cycle(client, conn, now, force=False) -> str:
     db.record_picks(conn, shown.ranked + shown.paper, now)
     tracker.judge(conn, now)
     db.prune(conn, now)
+    try:
+        compare(client, conn, now)
+    except Exception:
+        log.exception("comparing tracked items across realms failed")  # never costs the scan itself
     return "done"
 
 

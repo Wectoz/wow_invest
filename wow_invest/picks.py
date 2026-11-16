@@ -16,6 +16,10 @@ def _money(cu):
     return " ".join(f"{v}{u}" for v, u in parts if v) or "0c"
 
 
+def _house(h):
+    return c.HOUSE_NAMES.get(h, h.title())
+
+
 def _sales_hold(s, now):
     return sales_per_day_window(s, now, 0, 24) >= 0.9 * sales_per_day_window(s, now, 24, 48)
 
@@ -103,11 +107,11 @@ def _flip(kind, row, buy, sell, held, now):
     going = going_price(sell.series, now)
     if going is None or not _trend_ok(sell.series, now):
         return None
-    where = "" if buy.house == sell.house else f" on {buy.house.title()}"
+    where = "" if buy.house == sell.house else f" on {_house(buy.house)}"
 
     def why(top):
         return (f"Listed at up to {_money(top)}{where}, {1 - top / going:.0%} under its 24h price"
-                f" of {_money(going)} on {sell.house.title()}")
+                f" of {_money(going)} on {_house(sell.house)}")
     return _build(kind, row, sell, held, now, buy.house, why, going=going, ladder=buy.ladder,
                   limit=int(c.BUY_BELOW * going))
 
@@ -161,7 +165,7 @@ def vendor_flip(row, d, held, now, rep=None):
     off, who = vendor_deal(row.item_id, rep)
     who = (f": {who}" if who else "") + (f" ({off:.0%} off for your reputation)" if off else "")
     text = (f"A vendor sells it for {_money(unit)}{who} and it goes for {_money(going)}"
-            f" on {d.house.title()}")
+            f" on {_house(d.house)}")
     return _build("vendor", row, d, held, now, "vendor", lambda _: text, going=going, unit_cost=unit)
 
 
@@ -302,5 +306,5 @@ def craft_flip(row, d, recipe, mats, held, now):
     p.score = score(p.profit, p.cost, p.days)
     need = ", ".join(f"{crafts * n}× {name} ({'vendor' if vend else 'AH'})" for name, n, _, vend in mats)
     p.reason = (f"Craft {crafts}× with {prof} (skill {skill}): {need}. Materials up to {_money(p.max_unit_price)}"
-                f" a piece, it goes for {_money(going)} on {d.house.title()}" + p.reason)
+                f" a piece, it goes for {_money(going)} on {_house(d.house)}" + p.reason)
     return p

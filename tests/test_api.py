@@ -102,14 +102,17 @@ def test_all_items_pages_until_total():
 
 def test_scan_times_maps_both_houses():
     m = lambda h, cap, au: {"region": "eu", "ruleset_id": 2, "house_id": h, "captured_at": cap, "auctions_at": au}
-    c, _, _ = client([m(111, "c1", "a1"), m(5, "x", "y"), m(117, "c2", "a2")])
+    c, _, _ = client([m(114, "c1", "a1"), m(5, "x", "y"), m(117, "c2", "a2")])
+    c.houses = {"alliance": "eu/2/114", "blackwater": "eu/2/117"}  # a Horde player on a Normal realm
     assert c.scan_times() == {"alliance": ("c1", "a1"), "blackwater": ("c2", "a2")}
 
 
 def test_deals_returns_ids_and_cut():
-    c, f, _ = client({"items": [{"item_id": 8494}, {"item_id": 7}], "auction_cut": 0.05})
+    c, f, _ = client(*[{"items": [{"item_id": 8494}, {"item_id": 7}], "auction_cut": 0.05}] * 2)
     assert c.deals("alliance", 2) == ([8494, 7], 0.05)
-    assert f.calls[0][0].endswith("/v1/markets/eu/2/111/deals?limit=2")
+    assert f.calls[0][0].endswith("/v1/markets/eu/1/110/deals?limit=2")
+    c.deals("us/2/114", 2)  # any market can be named outright, for the comparison across realms
+    assert f.calls[1][0].endswith("/v1/markets/us/2/114/deals?limit=2")
 
 
 def test_parse_detail_unknown_item_does_not_raise():

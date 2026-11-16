@@ -69,6 +69,10 @@ def _shaped(fn):
 class Client:
     def __init__(self, fetch=None, sleep=time.sleep, clock=time.monotonic):
         self._fetch, self._sleep, self._clock, self._last = fetch or _fetch, sleep, clock, None
+        self.houses = dict(config.HOUSES)  # the scanner points these at the player's realm
+
+    def _key(self, house):
+        return self.houses.get(house, house)  # a house of the player's realm, or any market as region/realm/house
 
     def get_json(self, path):
         url, delays = config.BASE_URL + path, [*config.RETRY_DELAYS_S, None]
@@ -97,10 +101,15 @@ class Client:
             self._sleep(retry_after if retry_after is not None else delay)
 
     @_shaped
-    def scan_times(self):
+    def markets(self):
+        """Every auction house the site covers: region, ruleset_id (the realm type), house_id, name and scan times."""
+        return [m for m in self.get_json("/v1/markets") if (m["region"], m["ruleset_id"], m["house_id"])]
+
+    @_shaped
+    def scan_times(self, markets=None):
         out = {}
-        for m in self.get_json("/v1/markets"):
-            for name, key in config.HOUSES.items():
+        for m in self.markets() if markets is None else markets:
+            for name, key in self.houses.items():
                 region, rs, house = key.split("/")
                 if (m["region"], m["ruleset_id"], m["house_id"]) == (region, int(rs), int(house)):
                     out[name] = (m["captured_at"], m["auctions_at"])
@@ -108,7 +117,7 @@ class Client:
 
     @_shaped
     def all_items(self, house):
-        key, rows, offset = config.HOUSES[house], [], 0
+        key, rows, offset = self._key(house), [], 0
         while True:
             d = self.get_json(f"/v1/markets/{key}/items?limit=200&offset={offset}")
             rows += [parse_row(x) for x in d["items"]]
@@ -118,9 +127,9 @@ class Client:
 
     @_shaped
     def deals(self, house, limit=100):
-        d = self.get_json(f"/v1/markets/{config.HOUSES[house]}/deals?limit={limit}")
+        d = self.get_json(f"/v1/markets/{self._key(house)}/deals?limit={limit}")
         return [x["item_id"] for x in d["items"]], d["auction_cut"]
 
     @_shaped
     def item_detail(self, house, item_id, cut):
-        return parse_detail(self.get_json(f"/v1/markets/{config.HOUSES[house]}/items/{item_id}"), house, cut)
+        return parse_detail(self.get_json(f"/v1/markets/{self._key(house)}/items/{item_id}"), house, cut)

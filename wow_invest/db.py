@@ -169,6 +169,16 @@ def get_setting(conn, key, default=None):
     return r[0] if r else default
 
 
+def clear_market(conn):
+    """Forget everything gathered about the realm scanned so far: its prices must not mix with another realm's.
+    Holdings, judged picks and the player's settings stay."""
+    with conn:
+        conn.execute("DELETE FROM snapshots")
+        conn.execute("DELETE FROM scans")
+        conn.execute("DELETE FROM picks WHERE judged_at IS NULL")
+        conn.execute("DELETE FROM settings WHERE key IN ('candidates', 'crowd', 'drift', 'stale', 'compare')")
+
+
 def get_gold(conn) -> int:
     return int(get_setting(conn, "gold", "0"))
 

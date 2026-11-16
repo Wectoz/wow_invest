@@ -121,3 +121,6 @@ details.filters[open] > summary { margin-bottom:10px; }
 .tab.none { opacity:.45; }
 @media (max-width:640px) { .more { padding-left:4px; } }
 .sect + .pick, .pick + .sect, .empty + .sect { margin-top:14px; }
+.cmp { border-collapse:collapse; color:var(--text); }
+.cmp td { padding:3px 22px 3px 0; white-space:nowrap; }
+details.realm { margin:10px 0 0; }

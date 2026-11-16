@@ -1,3 +1,4 @@
+import json
 import threading
 import urllib.error
 import urllib.parse
@@ -200,7 +201,7 @@ def test_labels_header_trend_depth():
     h = state_html(c)
     assert "Blackwater → Alliance" in h and "price -12% vs a day ago" in h and "7 listed just above your price" in h
     assert "≈4 sold/day (estimate) · 740 listed on the sell AH" in h and "sales per day" not in h
-    assert "Alliance · Normal (PvE) · EU — Alliance AH + Blackwater AH" in h
+    assert "Alliance · Realm type 1 · EU — Alliance AH + Blackwater AH" in h  # no realm chosen, site not read yet
     assert "trend unknown" in state_html(seed(":memory:", [replace(mkpick(1), trend=None)]))
     assert "Vendor → Alliance AH" in state_html(seed(":memory:", [mkpick(1, kind="vendor")]))
 
@@ -529,3 +530,47 @@ def test_search_finds_items_by_name_and_a_star_keeps_them_on_the_tracked_tab(ser
     req(base + "/star", {"item_id": "7"}, hdr)  # a second press stops tracking
     assert "Nothing tracked yet" in req(base + "/?tab=tracked")[1]
     assert req(base + "/star", {"item_id": "x"}, hdr)[0] == 400
+
+
+# the site's houses for two regions and two realm types: [region, realm type id, house id, name]
+SITE = [[r, rs, h, f"{n} Auction House · {t}"] for r in ("eu", "us")
+        for rs, t, hs in ((1, "PvP", (110, 113, 116)), (2, "Normal (PvE)", (111, 114, 117)))
+        for h, n in zip(hs, ("Alliance", "Horde", "Blackwater"))]
+
+
+def test_main_realm_is_the_players_choice_and_switching_clears_the_old_realms_prices(server, monkeypatch):
+    path, base, _ = server
+    scans = []
+    monkeypatch.setattr(web.scanner, "refresh", scans.append)  # a switch starts a scan: not against the real site
+    c = db.connect(path)
+    db.set_setting(c, "markets", json.dumps(SITE))
+    db.set_gold(c, 5_000_000)
+    at = datetime.now(UTC).isoformat()
+    db.save_scan(c, "alliance", at, at, 0.05, [Row(7, "Wildvine", None, None, None, None, None, None, 196, None, 40, 1, 400, None)])
+    h = req(base + "/")[1]
+    assert "Alliance · PvP · EU — Alliance AH" in h and "Change realm" in h and '<option value="us">US</option>' in h
+    hdr = {"Content-Type": "application/x-www-form-urlencoded"}
+    assert req(base + "/realm", {"region": "us", "realm": "2", "faction": "horde"}, hdr)[0] == 303
+    assert "Horde · Normal (PvE) · US — Horde AH" in req(base + "/")[1]
+    assert db.get_setting(c, "market") == "us/2/horde" and db.get_gold(c) == 5_000_000
+    assert c.execute("SELECT count(*) FROM scans").fetchone()[0] == 0 and len(scans) == 1
+    req(base + "/realm", {"region": "us", "realm": "2", "faction": "horde"}, hdr)  # the same realm again: nothing to do
+    assert len(scans) == 1
+    for bad in ({"region": "xx", "realm": "2", "faction": "horde"}, {"region": "us", "realm": "9", "faction": "horde"},
+                {"region": "us", "realm": "2", "faction": "blackwater"}):
+        assert req(base + "/realm", bad, hdr)[0] == 400
+
+
+def test_a_tracked_item_opens_to_its_price_on_every_realm(server):
+    path, base, _ = server
+    c = db.connect(path)
+    at = datetime.now(UTC).isoformat()
+    db.save_scan(c, "alliance", at, at, 0.05, [Row(7, "Wildvine", None, None, None, None, None, None, 196, None, 40, 1, 400, None)])
+    db.set_setting(c, "markets", json.dumps(SITE))
+    db.set_setting(c, "starred", "[7]")
+    assert "arrive with the next scan" in req(base + "/?tab=tracked")[1]
+    db.set_setting(c, "compare", json.dumps({"7": {"at": at, "rows": [
+        ["eu", 1, 196, 40, 200], ["eu", 2, 150, 10, 30], ["us", 1, None, 0, 0], ["us", 2, 300, 5, 12]]}}))
+    h = req(base + "/?tab=tracked")[1]
+    assert "EU · PvP" in h and "your realm" in h and "US · Normal (PvE)" in h and "not listed" in h
+    assert h.index("EU · Normal (PvE)") < h.index("EU · PvP") < h.index("US · Normal (PvE)")  # cheapest first
