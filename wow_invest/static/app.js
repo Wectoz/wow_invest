@@ -26,3 +26,12 @@ document.querySelectorAll("img.ico").forEach(function (img) {
   img.addEventListener("error", blank);
   if (img.complete && !img.naturalWidth) blank();
 });
+// The Sell now panel stays open or closed as you left it, across reloads and after pressing Sold.
+(function () {
+  var d = document.getElementById("holdings");
+  if (!d) return;
+  try { d.open = localStorage.getItem("holdings") === "open"; } catch (e) {}
+  d.addEventListener("toggle", function () {
+    try { localStorage.setItem("holdings", d.open ? "open" : "closed"); } catch (e) {}
+  });
+})();

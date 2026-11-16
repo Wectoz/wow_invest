@@ -131,3 +131,22 @@ details.realm { margin:10px 0 0; }
 .welcome > button { font-size:15px; padding:6px 22px; }
 .foot { text-align:center; margin:4px 0 10px; font-size:12px; }
 button.new { border-color:var(--gold); color:var(--gold); }
+.more .boughtform { align-items:center; gap:8px 18px; }
+.more details.other { padding:0; grid-column:auto; }
+.more details.other[open] { flex:1 0 100%; }
+.held .nums input.qty { width:54px; }
+/* ---- Sell now: a panel on the right edge, hidden until its tab is clicked ---- */
+details.drawer { padding:0; font-size:inherit; color:inherit; }
+details.drawer > summary { position:fixed; right:0; top:38%; z-index:3; writing-mode:vertical-rl; list-style:none;
+  padding:14px 7px; font-size:13px; letter-spacing:1px; color:var(--gold); background:var(--panel);
+  border:1px solid var(--edge-dark); border-right:0; border-radius:6px 0 0 6px; }
+details.drawer > summary::-webkit-details-marker { display:none; }
+details.drawer > summary:hover { border-color:var(--edge); }
+details.drawer > summary span { color:var(--text); }
+details.drawer[open] > summary { right:min(440px, 92vw); }
+.panel { position:fixed; top:0; right:0; bottom:0; width:min(440px, 92vw); z-index:2; overflow-y:auto; box-sizing:border-box;
+  padding:18px 16px; background:var(--panel); border-left:1px solid var(--edge-dark); box-shadow:-12px 0 28px #000b; }
+.panel .row { grid-template-columns:42px 1fr; }
+.panel .row > div:empty { display:none; }
+.panel .nums { grid-column:1 / -1; text-align:left; white-space:normal; }
+.panel .held .why { white-space:normal; }

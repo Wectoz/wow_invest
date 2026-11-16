@@ -195,9 +195,22 @@ def add_holding(conn, item_id, kind, qty, price_paid, target, now, sell_by, sell
             (item_id, kind, qty, price_paid, target, _iso(now), _iso(sell_by), sell_at)).lastrowid
 
 
-def mark_sold(conn, holding_id, now, price: int | None = None):
+def mark_sold(conn, holding_id, now, price: int | None = None, qty: int | None = None):
+    """Sell a holding, or `qty` units of it: the sold part becomes a sale of its own, with its share of what
+    was paid, and the rest stays held. So one purchase can be sold in batches at different prices."""
     with conn:
-        conn.execute("UPDATE holdings SET sold_at=?, sold_price=? WHERE id=?", (_iso(now), price, holding_id))
+        h = conn.execute("SELECT * FROM holdings WHERE id=? AND sold_at IS NULL", (holding_id,)).fetchone()
+        if h is None or qty is None or qty >= h["qty"]:
+            conn.execute("UPDATE holdings SET sold_at=?, sold_price=? WHERE id=?", (_iso(now), price, holding_id))
+            return
+        part = round(h["price_paid"] * qty / h["qty"])
+        conn.execute(
+            "INSERT INTO holdings(item_id, kind, qty, price_paid, target, bought_at, sell_by, sell_at, sold_at, "
+            "sold_price) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (h["item_id"], h["kind"], qty, part, h["target"], h["bought_at"], h["sell_by"], h["sell_at"],
+             _iso(now), price))
+        conn.execute("UPDATE holdings SET qty=?, price_paid=? WHERE id=?",
+                     (h["qty"] - qty, h["price_paid"] - part, holding_id))
 
 
 def real_results(conn, cut: float) -> dict[str, tuple[int, int]]:

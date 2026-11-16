@@ -340,15 +340,21 @@ def _qcls(quality) -> str:
 
 def _bought_form(p) -> str:
     sb = p.sell_by.isoformat() if p.sell_by else ""
-    return (f'<form class="boughtform" method="post" action="/bought">'
-            f'<input type="hidden" name="item_id" value="{esc(p.item_id)}">'
+    what = (f'<input type="hidden" name="item_id" value="{esc(p.item_id)}">'
             f'<input type="hidden" name="kind" value="{esc(p.kind)}">'
             f'<input type="hidden" name="sell_at" value="{esc(p.sell_at)}">'
             f'<input type="hidden" name="target" value="{esc(p.sell_price)}">'
-            f'<input type="hidden" name="sell_by" value="{esc(sb)}">'
+            f'<input type="hidden" name="sell_by" value="{esc(sb)}">')
+    # one click records the suggested amount at the suggested cost; anything else is one step away
+    return (f'<div class="boughtform"><form method="post" action="/bought">{what}'
+            f'<input type="hidden" name="qty" value="{esc(p.qty)}">'
+            f'<input type="hidden" name="price_paid" value="{esc(plain_gold(p.cost))}">'
+            f'<button title="Records {esc(p.qty)} bought for {esc(plain_gold(p.cost))} in total">I bought this</button></form>'
+            f'<details class="other"><summary>I bought a different amount</summary>'
+            f'<form class="boughtform" method="post" action="/bought">{what}'
             f'<label>Qty <input type="text" class="qty" name="qty" value="{esc(p.qty)}"></label>'
-            f'<label>Paid <input type="text" name="price_paid" value="{esc(plain_gold(p.cost))}"></label>'
-            f'<button>I bought this</button></form>')
+            f'<label>Paid in total <input type="text" name="price_paid" value="{esc(plain_gold(p.cost))}"></label>'
+            f'<button>Save</button></form></details></div>')
 
 
 def _star_form(item_id, on) -> str:
@@ -438,8 +444,10 @@ def _held_row(v) -> str:
             f'<span class="tag">{esc(KINDS.get(h.kind, (h.kind,))[0])}</span><span class="tag">{esc(_house(h.sell_at))}</span>'
             f'<div class="why">{h.qty} × paid {fmt_money(h.price_paid // h.qty)}, target {fmt_money(h.target)}{sb}</div></div>'
             f'<div class="nums">{adv}<br><form class="inline" method="post" action="/sold">'
-            f'<input type="hidden" name="holding_id" value="{esc(h.id)}"><label>for <input type="text" name="price" '
-            f'value="{esc(sold_for)}" aria-label="Sold for, each"> each</label> <button>Sold</button></form></div></div></div>')
+            f'<input type="hidden" name="holding_id" value="{esc(h.id)}"><label>sold <input type="text" class="qty" '
+            f'name="qty" value="{esc(h.qty)}" aria-label="How many you sold"></label> <label>for <input type="text" '
+            f'name="price" value="{esc(sold_for)}" aria-label="Sold for, each"> each</label> <button title="Sell them '
+            f'in batches: enter how many sold and for how much, the rest stays here">Sold</button></form></div></div></div>')
 
 
 def _rows(items, empty, fn) -> str:
@@ -597,7 +605,7 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
                                                  if state["drift"] else "")) if state["crowd"] else "unknown",
         last_scan=esc(last), hit_rate=esc(hit), real=_real(state["real"]),
         buy=buy,
-        sell=_rows(state["holdings"], "Nothing held.", lambda x, n: _held_row(x)))
+        sell=_rows(state["holdings"], "Nothing held.", lambda x, n: _held_row(x)), held_n=len(state["holdings"]))
 
 
 def _int(text, name, lo, hi) -> int:
@@ -697,7 +705,8 @@ ROUTES = {
     "/gold": lambda c, f, now: db.set_gold(c, parse_gold(f.get("gold", ""))),
     "/bought": _bought,
     "/sold": lambda c, f, now: db.mark_sold(c, _int(f.get("holding_id"), "Holding", 1, 10**12), now,
-                                            parse_gold(f["price"]) if f.get("price", "").strip() else None),
+                                            parse_gold(f["price"]) if f.get("price", "").strip() else None,
+                                            _int(f["qty"], "Quantity", 1, 100_000) if f.get("qty", "").strip() else None),
     "/refresh": _refresh,
     "/skills": _skills,
     "/rep": _rep,

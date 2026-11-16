@@ -169,10 +169,13 @@ def test_blackwater_holding_uses_blackwater_price_and_cut():
 def test_bought_form_sits_in_the_opened_row_on_ranked_and_paper():
     c = seed(":memory:", [mkpick(1), mkpick(2, kind="hold")])
     h = state_html(c) + state_html(c, tab="invest")  # the buy list, then the multi-day bets
-    assert h.count('action="/bought"') == 2 and h.count("I bought this") == 2
+    # each pick: one button that records the suggested amount, and a form for a different one
+    assert h.count('action="/bought"') == 4 and h.count(">I bought this</button>") == 2
+    assert h.count("I bought a different amount") == 2 and 'name="qty" value="5"' in h
     row = h[h.index('<summary class="row">'):]
     assert 'action="/bought"' not in row[:row.index("</summary>")]  # the closed row carries no form
-    assert 'action="/bought"' in row[:row.index("</details>")] and 'action="/hide"' in row[:row.index("</details>")]
+    opened = row[:row.index('class="star"')]  # the rest of this pick, up to its star
+    assert 'action="/bought"' in opened and 'action="/hide"' in opened
     assert 'name="sell_at" value="alliance"' in h
 
 
@@ -387,6 +390,26 @@ def test_sold_price_feeds_real_results_and_an_undercut_is_flagged(server):
     other = db.add_holding(c, 7, "flip", 1, 100, 200, NOW, None)
     assert req(base + "/sold", {"holding_id": str(other), "price": ""})[0] == 303  # no price: sold, not counted
     assert db.real_results(c, 0.05) == {"vendor": (1, 45000)} and db.open_holdings(c) == []
+
+
+def test_a_holding_can_be_sold_in_batches_at_different_prices(server):
+    path, base, port = server
+    c = db.connect(path)
+    hid = db.add_holding(c, 7, "buyout", 10, 100001, 30000, NOW, None)  # ten bought for 10g 0s 1c in all
+    h = req(base + "/")[1]
+    assert 'name="qty" value="10"' in h  # prefilled with all that is left
+    # the holdings sit in a side panel with a tab that counts them: no scrolling past the picks
+    assert '<details class="drawer" id="holdings">' in h and "Sell now <span>1</span>" in h
+    assert req(base + "/sold", {"holding_id": str(hid), "qty": "4", "price": "4g"})[0] == 303
+    (h,) = db.open_holdings(c)
+    assert (h.id, h.qty, h.price_paid) == (hid, 6, 60001)  # the rest stays, with its share of the cost
+    assert db.real_results(c, 0.05) == {"buyout": (1, 112000)}  # 4 × 4g × 0.95 − 4g paid
+    assert req(base + "/sold", {"holding_id": str(hid), "qty": "1", "price": "2g"})[0] == 303
+    assert req(base + "/sold", {"holding_id": str(hid), "qty": "99", "price": "3g"})[0] == 303  # more than left: all of it
+    assert db.open_holdings(c) == []
+    # 112000 + (1 × 2g × 0.95 − 10000) + (5 × 3g × 0.95 − 50001): every copper paid is counted once
+    assert db.real_results(c, 0.05) == {"buyout": (3, 112000 + 9000 + 92499)}
+    assert req(base + "/sold", {"holding_id": str(hid), "qty": "0", "price": "3g"})[0] == 400
 
 
 def test_controls_hide_sort_and_minimum_profit(server):
