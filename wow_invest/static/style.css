@@ -150,3 +150,8 @@ details.drawer[open] > summary { right:min(440px, 92vw); }
 .panel .row > div:empty { display:none; }
 .panel .nums { grid-column:1 / -1; text-align:left; white-space:normal; }
 .panel .held .why { white-space:normal; }
+.pager { display:flex; justify-content:center; align-items:center; gap:22px; padding:14px 0 4px; font-size:14px; }
+.pager a { color:var(--gold); text-decoration:none; padding:4px 10px; border:1px solid var(--edge-dark); border-radius:3px; }
+.pager a:hover { border-color:var(--edge); }
+.pager span { color:var(--edge-dark); padding:4px 10px; }
+.pager b { font-weight:normal; color:var(--muted); }

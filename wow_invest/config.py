@@ -24,6 +24,7 @@ STALE_HOURS = 2
 MIN_PROFIT = 1000  # 10s: prices on this realm are low, so a higher bar leaves a handful of picks
 MIN_UNIT_PROFIT = 10  # copper per item: below this a pick means hauling thousands of items for little
 TOP_N = 40
+PAGE_SIZE = 10  # picks shown at a time; the rest are a page away
 CAPTURE_SHARE = 0.5
 MAX_SALES_DAYS = 2.5
 SUPPLY_SHARE = 0.25  # never buy more than this share of the units listed on the sell house

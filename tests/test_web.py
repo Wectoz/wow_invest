@@ -646,3 +646,22 @@ def test_version_is_shown_and_a_newer_one_on_github_offers_an_update(server, mon
     assert "Update to v0.10.0" in req(base + "/")[1]
     assert req(base + "/update", {}, {"Content-Type": "application/x-www-form-urlencoded"})[0] == 303
     assert opened == [config.UPDATE_PAGE]
+
+
+def test_picks_come_ten_to_a_page_and_a_post_lands_back_on_the_same_page(server):
+    path, base, _ = server
+    c = db.connect(path)
+    db.set_gold(c, 10**9)
+    db.save_candidates(c, [replace(mkpick(i, f"pick-{i:02}"), score=100 - i) for i in range(1, 14)], NOW.isoformat())
+    first, second = req(base + "/?tab=all")[1], req(base + "/?tab=all&page=2")[1]
+    assert "pick-10" in first and "pick-11" not in first and "Page 1 of 2" in first and 'href="/?tab=all&amp;page=2"' in first
+    assert "pick-11" in second and "pick-13" in second and "pick-10" not in second and "Page 2 of 2" in second
+    assert '<div class="rank">11</div>' in second and 'href="/?tab=all"' in second  # the ranks carry on; back to page 1
+    assert "Page 2 of 2" in req(base + "/?tab=all&page=99")[1] and "Page 1 of 2" in req(base + "/?tab=all&page=x")[1]
+    hdr = {"Content-Type": "application/x-www-form-urlencoded", "Referer": base + "/?tab=all&page=2"}
+    r = urllib.request.Request(base + "/star", urllib.parse.urlencode({"item_id": "12"}).encode(), hdr)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.build_opener(_NoRedirect).open(r)
+    assert e.value.code == 303 and e.value.headers["Location"] == "/?tab=all&page=2"
+    db.save_candidates(c, [mkpick(1, "only-one")], NOW.isoformat())
+    assert "Page 1" not in req(base + "/?tab=all")[1]  # a single page needs no pager

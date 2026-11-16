@@ -495,7 +495,7 @@ def _skills_form(skills: dict) -> str:
 
 
 def render_page(state: dict, error: str | None = None, css_href: str = "/static/style.css",
-                tab: str = "all") -> str:
+                tab: str = "all", page: int = 1) -> str:
     p, st = state["plan"], state["stats"]
     tab = tab if tab in TABS else "all"
     sort = state["sort"] if state["sort"] in SORTS else "return"
@@ -561,8 +561,15 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
                + _rows(w["starred"], "Nothing tracked yet. Search for an item, or press ☆ on a pick.",
                        lambda v, n: _item_row(v, on, mk)))
     else:
-        buy = _rows(shown, "Nothing worth buying right now.",
-                    lambda x, n: _pick_row(x, n, dim=x.kind in funded_kinds, starred=x.item_id in w["ids"]))
+        pages = max(1, math.ceil(len(shown) / C.PAGE_SIZE))
+        page = min(max(page, 1), pages)
+        skip = (page - 1) * C.PAGE_SIZE
+        link = lambda n, text: f'<a href="{esc(_at(tab, n))}">{text}</a>'
+        pager = ('<nav class="pager">' + (link(page - 1, "‹ Previous") if page > 1 else "<span>‹ Previous</span>")
+                 + f'<b>Page {page} of {pages}</b>'
+                 + (link(page + 1, "Next ›") if page < pages else "<span>Next ›</span>") + '</nav>') if pages > 1 else ""
+        buy = _rows(shown[skip:skip + C.PAGE_SIZE], "Nothing worth buying right now.",
+                    lambda x, n: _pick_row(x, n + skip, dim=x.kind in funded_kinds, starred=x.item_id in w["ids"])) + pager
     count = lambda k: len(w["starred"]) if k == "tracked" else len(in_tab(k))
     tabs = "".join(
         f'<a class="tab{" on" if k == tab else "" if count(k) else " none"}" href="/?tab={k}">{esc(label)} '
@@ -591,7 +598,7 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     hit = f'{st["hits"]} of {st["judged"]} ({st["hits"] * 100 // st["judged"]}%)' if st["judged"] else "none judged yet"
     last = _hm(state["last_scan"]) if state["last_scan"] else "never"
     return Template((HERE / "page.html").read_text(encoding="utf-8")).substitute(
-        css_href=esc(css_href), banners="".join(ban), here=f"/?tab={tab}",
+        css_href=esc(css_href), banners="".join(ban), here=esc(_at(tab, page)),
         version=esc(_version(state)),
         search=search, tabs=f'<nav class="tabs">{tabs}</nav>' + controls + (_profession_bar(state["professions"]) + _skills_form(state["skills"]) if tab == "craft" else "")
         + (_rep_form(state["rep"]) if tab == "vendor" else ""), reload_s=5 if state["scanning"] else 300,
@@ -690,6 +697,17 @@ def _rep_form(rep: dict) -> str:
             'Vendor prices use this from the next scan on (press Refresh picks).</p></details>')
 
 
+def _at(tab: str, page: int = 1) -> str:
+    """The address of a tab, and of a later page of its picks."""
+    return f"/?tab={tab}" + (f"&page={page}" if page > 1 else "")
+
+
+def _page_no(url: str | None) -> int:
+    """The page of picks named in a page URL: a reload or a form post lands back on it."""
+    n = parse_qs(urlsplit(url or "").query).get("page", ["1"])[0]
+    return int(n) if n.isdigit() and 0 < int(n) < 10**6 else 1
+
+
 def _tab(url: str | None) -> str:
     """The tab named in a page URL, so a reload or a form post lands back on it."""
     tab = parse_qs(urlsplit(url or "").query).get("tab", ["all"])[0]
@@ -749,13 +767,13 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return not (post and origin is not None and origin not in {f"http://{h}" for h in ok})
 
-    def _page(self, code=200, error=None, tab="all", q=""):
+    def _page(self, code=200, error=None, tab="all", q="", page=1):
         conn = db.connect(self.server.db_path)
         try:
             if db.get_setting(conn, "market") is None:  # first start: nothing to show until a realm is chosen
                 html = welcome_page(scanner.known_markets(conn), error)
             else:
-                html = render_page(build_state(conn, datetime.now(UTC), q), error, tab=tab)
+                html = render_page(build_state(conn, datetime.now(UTC), q), error, tab=tab, page=page)
         finally:
             conn.close()
         self._send(code, html, "text/html; charset=utf-8")
@@ -765,7 +783,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, "forbidden")
         path = urlsplit(self.path).path
         if path == "/":
-            self._page(tab=_tab(self.path), q=parse_qs(urlsplit(self.path).query).get("q", [""])[0][:60])
+            self._page(tab=_tab(self.path), q=parse_qs(urlsplit(self.path).query).get("q", [""])[0][:60],
+                       page=_page_no(self.path))
         elif path == "/version":
             conn = db.connect(self.server.db_path)
             try:
@@ -803,10 +822,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             ROUTES[path](conn, form, datetime.now(UTC))
         except ValueError as e:
-            return self._page(400, str(e), _tab(self.headers.get("Referer")))
+            return self._page(400, str(e), _tab(self.headers.get("Referer")), page=_page_no(self.headers.get("Referer")))
         finally:
             conn.close()
-        self._send(303, headers=[("Location", f"/?tab={_tab(self.headers.get('Referer'))}")])
+        ref = self.headers.get("Referer")
+        self._send(303, headers=[("Location", _at(_tab(ref), _page_no(ref)))])
 
 
 class Server(ThreadingHTTPServer):
