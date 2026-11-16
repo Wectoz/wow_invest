@@ -47,7 +47,7 @@ STATIC_PER_CYCLE = 60
 # vendors of a city's faction sell cheaper to players in good standing with it
 REP_CITIES = {"S": "Stormwind", "I": "Ironforge", "D": "Darnassus", "G": "Gnomeregan Exiles"}
 REP_DISCOUNT = {"Friendly": 0.05, "Honored": 0.10, "Revered": 0.15, "Exalted": 0.20}
-REP_DEFAULT = '{"S": "Revered"}'  # until the player sets their own standings
+REP_DEFAULT = '{}'  # no standing, so no discount, until the player sets their own
 DETAIL_QUOTAS = {"flip": 400, "cross": 40, "vendor": 40, "hold": 30, "rise": 25, "trend": 30, "buyout": 40, "swing": 40, "slow": 60}
 # buyout: take the whole cheap shelf and relist at the price the item usually holds
 BUYOUT_MIN_HISTORY_H = 72  # judge a buyout on three days of prices at least
