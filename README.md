@@ -1,40 +1,59 @@
 # WoW Invest
 
-A desktop auction-house advisor for World of Warcraft. It watches prices, then suggests what to buy and what to sell, with the profit it expects after the auction house cut.
-
-Built for **WoW Forever, EU, Normal (PvE), Alliance**. The neutral **Blackwater** AH is switched off for now (`SCAN_HOUSES` in `wow_invest/config.py` turns it back on). Other realms and factions are not covered.
-
-It reads the public [blackwater.exchange](https://blackwater.exchange) API politely: about one request a second, and only when the site has a new scan. It is not affiliated with Blizzard or blackwater.exchange.
+A desktop helper for the World of Warcraft auction house. It watches prices and suggests what to buy and what to sell, with the profit it expects after the auction house cut.
 
 It never touches the game. You buy and sell by hand.
 
+Prices come from the public [blackwater.exchange](https://blackwater.exchange) API, read at about one request a second. WoW Invest is not affiliated with Blizzard or blackwater.exchange.
+
 ## Install (Windows 10/11)
 
-1. On GitHub, click **Code → Download ZIP**, then extract it anywhere. You can also `git clone` it.
+1. On GitHub, click **Code → Download ZIP** and extract it anywhere.
 2. Double-click **`install.cmd`**.
 3. Double-click **WoW Invest** on your desktop.
 
-The installer sets up everything for your Windows user only:
-- [uv](https://docs.astral.sh/uv/), a Python manager
-- Python 3.12
-- pywebview, which draws the window with WebView2, a component built into Windows
-- the program, installed in `%LOCALAPPDATA%\WowInvest`
+No admin rights are needed. To update, download the new version and run `install.cmd` again; your data is kept.
 
-It doesn't need admin rights. To update, download the new version and run `install.cmd` again; your data is kept.
+If Windows says the file is blocked, right-click `install.cmd`, choose **Properties**, tick **Unblock**, and run it again.
 
-The program opens in its own window. Closing the window quits it.
+To uninstall, delete the desktop icon and the folder `%LOCALAPPDATA%\WowInvest`. That folder also holds your data.
 
-If Windows says the file is blocked, right-click `install.cmd`, choose **Properties**, tick **Unblock**, then run it again.
+## First start
 
-**Uninstall:** delete the desktop icon and the `%LOCALAPPDATA%\WowInvest` folder, which also holds your data.
+1. Open **Change realm** at the top and pick your region, realm type and faction. Until you do, the program uses the first realm the site lists.
+2. Enter your gold.
+3. Wait a few minutes for the first scan. Picks appear after it.
 
 ## Using it
 
-Enter the gold you have and the program suggests what to spend it on. Mark what you bought and sold, so it can keep track of what you hold.
+The list is ordered: buy from the top. Click a pick to see why it was chosen and to mark it as bought. Items you hold show up under **Sell now** with the price to list at.
 
-- Right after the first start the page says "Gathering price history". Picks can appear after the first scan cycle, which takes a few minutes, because the site already keeps price history. Holds need about a day of scans.
-- Holds stay "on paper", meaning tracked but not funded, until their price has held at target often enough: at least 10 judged holds, 70% of them hitting, across at least 5 items and 3 days.
+| Tab | What it shows |
+|---|---|
+| AH flips | Items listed well under their usual price |
+| Slow sellers | Underpriced items that sell a few times a day |
+| Vendor flips | Items a vendor sells for less than the auction house pays (Alliance only) |
+| Crafting | Recipes whose product sells for more than the materials cost |
+| Investments | Bets on a price rising over several days |
+| Buyouts | Buying a whole cheap shelf and relisting it |
+| Daily swings | Fast sellers whose price dips and recovers every day |
+| ★ Tracked | Items you starred, with their price on every realm |
+
+Investments, Buyouts and Daily swings are not proven yet. The program shows them but never spends your gold on them.
+
+Other things you can do:
+
+- **Search** for any item by name with the box above the tabs.
+- **Star** an item to track it. A tracked item opens to its price on every realm, cheapest first.
+- **Filters** set the item type, the sort order and the smallest profit worth showing.
+- **Hide** an item you never want suggested again.
+
+## Good to know
+
+- Every profit is an estimate. A pick that held its price did not necessarily sell.
+- Changing your main realm clears the price history gathered so far. Your holdings and settings stay.
 - The listing-deposit rates are a guess. Check them in game.
+- Your gold, realm and other choices are stored only on your PC.
 
 ## For developers
 
@@ -43,4 +62,4 @@ uv run pytest -q                 # tests
 uv run python -m wow_invest      # run as a local web page on http://localhost:8765 (Linux/WSL)
 ```
 
-Data: `%LOCALAPPDATA%\WowInvest\wow_invest.db` on Windows; `data/wow_invest.db` when run from the repo, which git ignores.
+Data lives in `%LOCALAPPDATA%\WowInvest\wow_invest.db` on Windows, and in `data/wow_invest.db` when run from the repo (git ignores it).
