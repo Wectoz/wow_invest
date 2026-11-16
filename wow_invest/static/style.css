@@ -124,3 +124,10 @@ details.filters[open] > summary { margin-bottom:10px; }
 .cmp { border-collapse:collapse; color:var(--text); }
 .cmp td { padding:3px 22px 3px 0; white-space:nowrap; }
 details.realm { margin:10px 0 0; }
+/* ---- welcome page and the standing risk note ---- */
+.welcome .sect { margin:18px 0 8px; }
+.welcome ul { margin:0 0 12px; padding-left:20px; font-size:14px; line-height:1.6; }
+.welcome .agree { display:flex; gap:8px; align-items:center; margin:0 0 14px; font-size:14px; }
+.welcome > button { font-size:15px; padding:6px 22px; }
+.foot { text-align:center; margin:4px 0 10px; font-size:12px; }
+button.new { border-color:var(--gold); color:var(--gold); }

@@ -2,8 +2,10 @@
 import json
 import logging
 import math
+import re
 import threading
 import time
+import urllib.request
 from datetime import UTC, datetime, timedelta
 
 from . import config as c
@@ -342,12 +344,36 @@ def _timed(conn, cycle):
     return result
 
 
+def check_update(conn, now):
+    """Twice a day, read the version of the program on GitHub; the page offers an update when it is newer."""
+    last = db.get_setting(conn, "update_checked")
+    if last and now - datetime.fromisoformat(last) < timedelta(hours=c.UPDATE_CHECK_HOURS):
+        return
+    db.set_setting(conn, "update_checked", now.isoformat())  # also after a failure: no retry storm
+    try:
+        req = urllib.request.Request(c.VERSION_URL, headers={"User-Agent": c.USER_AGENT})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            m = re.search(r'__version__ = "(\d+(?:\.\d+)*)"', r.read(2000).decode("utf-8", "replace"))
+        if m:
+            db.set_setting(conn, "latest_version", m[1])
+    except Exception as e:
+        log.info("could not check for a newer version: %s", e)
+
+
 def loop(client_factory, db_path, stop):
     conn, client, wait, result = None, client_factory(), c.POLL_MINUTES, None
     while not stop.is_set():
         try:
             if conn is None:
                 conn = db.connect(db_path)
+            check_update(conn, datetime.now(UTC))
+            if db.get_setting(conn, "market") is None:
+                # first start: nothing is scanned until the player has picked a realm on the welcome page,
+                # which needs the list of realms the site covers
+                if not known_markets(conn):
+                    use_market(conn, client)
+                stop.wait(5)
+                continue
             # a cycle that failed after saving its scan would otherwise read as "no-change" until the next scan
             force = result == "error"
             with busy:

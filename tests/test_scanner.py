@@ -291,16 +291,32 @@ class FakeStop:
         self.waits.append(timeout)
 
 
+def chosen(tmp_path) -> str:
+    """A database past the welcome page: its realm is chosen, so the loop scans."""
+    path = str(tmp_path / "w.db")
+    db.set_setting(db.connect(path), "market", "eu/1/alliance")
+    return path
+
+
+def test_loop_scans_nothing_until_a_realm_is_chosen_but_learns_the_sites_realms(monkeypatch, tmp_path):
+    monkeypatch.setattr(scanner, "run_cycle", lambda *a, **k: pytest.fail("scanned before a realm was chosen"))
+    monkeypatch.setattr(scanner, "check_update", lambda conn, now: None)
+    fc, stop, path = flip_client(), FakeStop(2), str(tmp_path / "w.db")
+    fc.site = [{"region": "eu", "ruleset_id": 1, "house_id": h, "name": "x"} for h in (110, 113, 116)]
+    scanner.loop(lambda: fc, path, stop)
+    assert stop.waits == [5, 5] and len(scanner.known_markets(db.connect(path))) == 3
+
+
 def test_loop_doubles_wait_after_errors_up_to_an_hour_and_resets(monkeypatch, tmp_path):
     results = iter(["error", "error", "error", "error", "error", "no-change", "error", "done"])
     monkeypatch.setattr(scanner, "run_cycle", lambda client, conn, now, force=False: next(results))
     stop = FakeStop(8)
-    scanner.loop(lambda: "client", str(tmp_path / "w.db"), stop)
+    scanner.loop(lambda: "client", chosen(tmp_path), stop)
     assert stop.waits == [m * 60 for m in (10, 20, 40, 60, 60, 5, 10, 5)]
 
 
 def test_loop_retries_db_connect_after_the_wait(monkeypatch, tmp_path, caplog):
-    real, tries = db.connect, []
+    path, real, tries = chosen(tmp_path), db.connect, []
 
     def connect(path):
         tries.append(path)
@@ -311,7 +327,7 @@ def test_loop_retries_db_connect_after_the_wait(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(db, "connect", connect)
     monkeypatch.setattr(scanner, "run_cycle", lambda client, conn, now, force=False: "done")
     stop = FakeStop(3)
-    scanner.loop(lambda: "client", str(tmp_path / "w.db"), stop)
+    scanner.loop(lambda: "client", path, stop)
     assert len(tries) == 2  # failed once, then connected and kept the connection
     assert stop.waits == [600, 300, 300] and "OperationalError: disk I/O error" in caplog.text
 
@@ -329,7 +345,7 @@ def test_loop_logs_errors_and_keeps_going(monkeypatch, tmp_path, caplog):
 
     monkeypatch.setattr(scanner, "run_cycle", cycle)
     monkeypatch.setattr(config, "POLL_MINUTES", 0)
-    scanner.loop(lambda: made.append(1) or "client", str(tmp_path / "w.db"), stop)
+    scanner.loop(lambda: made.append(1) or "client", chosen(tmp_path), stop)
     assert seen == ["client", "client"] and made == [1]
     assert "RuntimeError: boom" in caplog.text and "done" in caplog.text
 

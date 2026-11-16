@@ -12,7 +12,9 @@ Prices come from the public [blackwater.exchange](https://blackwater.exchange) A
 2. Double-click **`install.cmd`**.
 3. Double-click **WoW Invest** on your desktop.
 
-No admin rights are needed. To update, download the new version and run `install.cmd` again; your data is kept.
+No admin rights are needed.
+
+**Updating:** the program shows an **Update** button when a newer version is on GitHub. Download the new version and run `install.cmd` again; your data is kept. The version you have is shown at the bottom of the window.
 
 If Windows says the file is blocked, right-click `install.cmd`, choose **Properties**, tick **Unblock**, and run it again.
 
@@ -20,9 +22,12 @@ To uninstall, delete the desktop icon and the folder `%LOCALAPPDATA%\WowInvest`.
 
 ## First start
 
-1. Open **Change realm** at the top and pick your region, realm type and faction. Until you do, the program uses the first realm the site lists.
-2. Enter your gold.
-3. Wait a few minutes for the first scan. Picks appear after it.
+1. Pick your region, realm type and faction.
+2. Enter the gold you want to trade with.
+3. Read the short list of risks and tick the box.
+4. Press **Start** and wait for the first scan. The window shows how many minutes are left.
+
+You can change your realm later under **Change realm** at the top.
 
 ## Using it
 
@@ -50,6 +55,7 @@ Other things you can do:
 
 ## Good to know
 
+- **You can lose gold.** The program gives suggestions, not guarantees: prices move, other players undercut you, and items can fail to sell.
 - Every profit is an estimate. A pick that held its price did not necessarily sell.
 - Changing your main realm clears the price history gathered so far. Your holdings and settings stay.
 - The listing-deposit rates are a guess. Check them in game.
@@ -61,5 +67,7 @@ Other things you can do:
 uv run pytest -q                 # tests
 uv run python -m wow_invest      # run as a local web page on http://localhost:8765 (Linux/WSL)
 ```
+
+For a release, raise `__version__` in `wow_invest/__init__.py`: installed copies compare theirs with that file on GitHub.
 
 Data lives in `%LOCALAPPDATA%\WowInvest\wow_invest.db` on Windows, and in `data/wow_invest.db` when run from the repo (git ignores it).

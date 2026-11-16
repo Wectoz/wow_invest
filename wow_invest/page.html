@@ -10,7 +10,7 @@ $banners
 <div class="frame">
   <header class="brand"><img src="/static/icon.svg" alt="" width="28" height="28"><h1>WoW Invest</h1>
     <div class="sub">$sub</div>
-    <form method="post" action="/refresh"><button$refresh_off>Refresh picks</button></form></header>
+    $update<form method="post" action="/refresh"><button$refresh_off>Refresh picks</button></form></header>
   <div class="stats">
     <div class="stat"><div class="k">Your gold</div><div class="v">
       <form class="goldform" method="post" action="/gold"><input type="text" name="gold" value="$gold_text" aria-label="Your gold"><button>Set</button></form></div></div>
@@ -25,6 +25,7 @@ $banners
 </div>
 <div class="frame"><div class="secthead"><div class="sect">Buy in this order</div>$search</div>$tabs$buy</div>
 <div class="frame"><div class="sect">Sell now</div><div class="sub">$real</div>$sell</div>
+<div class="sub foot">Suggestions and profits are estimates, not guarantees. You can lose gold, and every trade is your own decision. · WoW Invest v$app_version</div>
 </main>
 <script src="/static/app.js"></script>
 </body></html>

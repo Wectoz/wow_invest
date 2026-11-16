@@ -5,6 +5,7 @@ import math
 import re
 import threading
 import time
+import webbrowser
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from html import escape
@@ -13,6 +14,7 @@ from pathlib import Path
 from string import Template
 from urllib.parse import parse_qs, urlsplit
 
+from . import __version__
 from . import config as C
 from . import db, scanner
 from .planner import holds_proven, plan
@@ -147,6 +149,15 @@ def _star(conn, f, now):
     db.set_setting(conn, "starred", json.dumps([x for x in ids if x != i] if i in ids else ids + [i]))
 
 
+def _newer(latest: str | None) -> str | None:
+    """`latest` when it is a higher version than this program's, else None."""
+    try:
+        num = lambda v: tuple(int(x) for x in v.split("."))
+        return latest if latest and num(latest) > num(__version__) else None
+    except ValueError:
+        return None
+
+
 def _market(conn) -> dict:
     scanner.use_market(conn)  # the house names in every label follow the player's faction
     ms, main = scanner.known_markets(conn), scanner.market(conn)
@@ -211,6 +222,7 @@ def build_state(conn, now: datetime, q: str = "") -> dict:
         # scans run hourly (the site's cadence), so the next one is expected an hour after the last
         "next_scan": last_ok + timedelta(hours=1) if last_ok else None,
         "now": now, "watch": _watch(conn, now, q), "market": mk,
+        "update": _newer(db.get_setting(conn, "latest_version")),
     }
 
 
@@ -231,26 +243,71 @@ def _set_realm(conn, f, now):
     if faction not in C.FACTIONS[:2] or not scanner.houses_of(ms, region, ruleset):
         raise ValueError("The price site does not cover that realm")
     new = f"{region}/{ruleset}/{faction}"
-    if new == db.get_setting(conn, "market", C.MARKET_DEFAULT):
+    if new == db.get_setting(conn, "market"):
         return
     db.clear_market(conn)
     db.set_setting(conn, "market", new)
     _refresh(conn, f, now)
 
 
-def _realm_form(m: dict) -> str:
-    """Region, realm type and faction of the player's main realm; the lists come from what the site covers."""
-    ms, (region, ruleset, faction) = m["markets"], m["main"]
+def _realm_selects(ms, region=None, ruleset=None, faction=None) -> str:
+    """Lists for region, realm type and faction, from what the site covers; nothing is chosen for you."""
     opt = lambda v, label, on: f'<option value="{esc(v)}"{" selected" if on else ""}>{esc(label)}</option>'
+    first = "" if region else '<option value="" selected disabled>Choose…</option>'
     regions = "".join(opt(r, C.REGIONS.get(r, r.upper()), r == region) for r in sorted({x[0] for x in ms}))
     realms = "".join(opt(rs, _realm_name(ms, rs), rs == ruleset) for rs in sorted({x[1] for x in ms}))
     factions = "".join(opt(x, x.title(), x == faction) for x in C.FACTIONS[:2])
+    return (f'<label>Region <select name="region" required>{first}{regions}</select></label><label>Realm '
+            f'<select name="realm" required>{first}{realms}</select></label><label>Faction '
+            f'<select name="faction" required>{first}{factions}</select></label>')
+
+
+RISKS = ("WoW Invest gives suggestions, not guarantees. Prices move, other players undercut you, and items can "
+         "fail to sell. You can lose gold.",
+         "Every profit it shows is an estimate from price history. It is not proof that an item will sell.",
+         "You make every purchase and sale yourself, in the game, and you alone are responsible for them.",
+         "It is not affiliated with Blizzard or with blackwater.exchange, the site its prices come from.")
+
+
+def _setup(conn, f, now):
+    """The welcome page: the risks accepted, then gold and realm saved together or not at all."""
+    if f.get("agree") != "yes":
+        raise ValueError("Tick the box to confirm you understand that you can lose gold")
+    gold = parse_gold(f.get("gold", ""))
+    _set_realm(conn, f, now)
+    db.set_gold(conn, gold)
+
+
+def welcome_page(markets: list, error: str | None = None, css_href: str = "/static/style.css") -> str:
+    """Shown instead of the program until a realm is chosen: realm, gold and the risks to accept."""
+    ban = f'<div class="banner err">{esc(error)}</div>' if error else ""
+    if markets:
+        body = ('<form class="welcome" method="post" action="/setup"><div class="sect">Your realm</div>'
+                f'<div class="controls">{_realm_selects(markets)}</div><div class="sect">Your gold</div>'
+                '<div class="controls"><label>Gold you want to trade with <input type="text" name="gold" '
+                'placeholder="e.g. 100g" required></label></div><div class="sect">Before you start</div>'
+                f'<ul>{"".join(f"<li>{esc(r)}</li>" for r in RISKS)}</ul>'
+                '<label class="agree"><input type="checkbox" name="agree" value="yes" required> I understand that '
+                'I can lose gold by following these suggestions.</label><button>Start</button></form>')
+        wait = ""
+    else:  # the scanner is fetching the list right now: look again shortly
+        body = '<div class="empty">Reading the list of realms from the price site… This takes a few seconds.</div>'
+        wait = '<meta http-equiv="refresh" content="3">'
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">{wait}<meta name="viewport" '
+            'content="width=device-width, initial-scale=1"><title>WoW Invest</title><link rel="icon" href="/favicon.ico">'
+            f'<link rel="stylesheet" href="{esc(css_href)}"></head><body><main>{ban}<div class="frame">'
+            '<header class="brand"><img src="/static/icon.svg" alt="" width="28" height="28"><h1>Welcome to WoW Invest</h1>'
+            '</header><p class="sub">It watches auction house prices and suggests what to buy and sell. It never touches '
+            f'the game: you trade by hand. Tell it where you play and what you have.</p>{body}</div></main></body></html>')
+
+
+def _realm_form(m: dict) -> str:
+    """Region, realm type and faction of the player's main realm."""
+    ms = m["markets"]
     if not ms:
         return ""
     return ('<details class="filters realm"><summary>Change realm</summary><form class="controls" method="post" '
-            f'action="/realm"><label>Region <select name="region">{regions}</select></label><label>Realm '
-            f'<select name="realm">{realms}</select></label><label>Faction <select name="faction">{factions}</select>'
-            '</label><button>Make this my main realm</button></form><div class="sub">Picks, prices and scans follow '
+            f'action="/realm">{_realm_selects(ms, *m["main"])}<button>Make this my main realm</button></form><div class="sub">Picks, prices and scans follow '
             'your main realm. Changing it clears the price history gathered so far, and new picks need a scan (a few '
             'minutes). Your holdings and settings stay.</div></details>')
 
@@ -509,7 +566,8 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
         at = min(97, max(0, int(100 * state["scan_for"] / state["scan_secs"])))
         left = max(1, int(state["scan_secs"] - state["scan_for"]))
         # each reload restarts the animation from where the scan is, so it reads as one slow sweep
-        ban.append('<div class="banner">Scanning the auction house now… This takes a few minutes; the page reloads '
+        mins = f"about {math.ceil(left / 60)} min left" if state["scan_for"] < state["scan_secs"] else "almost done"
+        ban.append(f'<div class="banner">Scanning the auction house now, {mins}. The page reloads '
                    f'by itself.<div class="bar"><i style="--from:{at}%;--left:{left}s"></i></div></div>')
     if state["gathering"]:
         ban.append('<div class="banner">Gathering price history… Picks can appear after the first scan cycle '
@@ -530,7 +588,9 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
         + (_rep_form(state["rep"]) if tab == "vendor" else ""), reload_s=5 if state["scanning"] else 300,
         refresh_off=" disabled" if state["scanning"] else "",
         sub=f'{esc(mk["label"])} — {esc(" + ".join(_house(h) for h in C.SCAN_HOUSES))} — {esc(age)}{esc(nxt)}',
-        realm=_realm_form(mk),
+        realm=_realm_form(mk), app_version=esc(__version__),
+        update=(f'<form method="post" action="/update"><button class="new" title="Opens the download page in your '
+                f'browser">Update to v{esc(state["update"])}</button></form>' if state["update"] else ""),
         gold_text=esc(plain_gold(state["gold"])), spend=fmt_money(p.spend), profit=fmt_money(p.profit),
         crowd=(f'lvl {esc(state["crowd"])}' + (f' <span class="sub">+{esc(state["drift"])} lvl/day</span>'
                                                  if state["drift"] else "")) if state["crowd"] else "unknown",
@@ -645,6 +705,8 @@ ROUTES = {
     "/hide": _hide,
     "/star": _star,
     "/realm": _set_realm,
+    "/setup": _setup,
+    "/update": lambda c, f, now: webbrowser.open(C.UPDATE_PAGE),
     "/unhide": lambda c, f, now: db.set_setting(c, "hidden", "[]"),
     "/sort": _sort,
     "/min-profit": _floors,
@@ -680,7 +742,10 @@ class Handler(BaseHTTPRequestHandler):
     def _page(self, code=200, error=None, tab="all", q=""):
         conn = db.connect(self.server.db_path)
         try:
-            html = render_page(build_state(conn, datetime.now(UTC), q), error, tab=tab)
+            if db.get_setting(conn, "market") is None:  # first start: nothing to show until a realm is chosen
+                html = welcome_page(scanner.known_markets(conn), error)
+            else:
+                html = render_page(build_state(conn, datetime.now(UTC), q), error, tab=tab)
         finally:
             conn.close()
         self._send(code, html, "text/html; charset=utf-8")

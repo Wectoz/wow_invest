@@ -25,6 +25,7 @@ def _fixed_thresholds(monkeypatch):
     monkeypatch.setattr(config, "MIN_UNIT_PROFIT", 0)
     monkeypatch.setattr(config, "DETAIL_QUOTAS", {"flip": 25, "cross": 20, "vendor": 10, "hold": 25, "rise": 10, "trend": 10, "buyout": 10, "swing": 10, "slow": 10})
     monkeypatch.setattr(config, "BUY_BELOW", 0.80)
+    monkeypatch.setattr(scanner, "check_update", lambda conn, now: None)  # no test asks GitHub for a newer version
     # the house names follow the player's faction once a page or a scan reads it: start each test from Alliance
     monkeypatch.setattr(config, "HOUSE_NAMES", {"alliance": "Alliance", "blackwater": "Blackwater"})
     monkeypatch.setattr(config, "SNIPE_DAYS", 0.25)

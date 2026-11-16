@@ -9,6 +9,10 @@ HOUSES = {"alliance": "eu/1/110", "blackwater": "eu/1/116"}
 HOUSE_NAMES = {"alliance": "Alliance", "blackwater": "Blackwater"}
 FACTIONS = ("alliance", "horde", "blackwater")  # a realm's three houses, in the order of the site's house ids
 REGIONS = {"eu": "EU", "us": "US", "kr": "Korea", "tw": "Taiwan"}
+# where a newer version is looked for (the public repository), and the page the update button opens
+VERSION_URL = "https://raw.githubusercontent.com/Wectoz/wow_invest/main/wow_invest/__init__.py"
+UPDATE_PAGE = "https://github.com/Wectoz/wow_invest#install-windows-1011"
+UPDATE_CHECK_HOURS = 12
 COMPARE_PER_CYCLE = 5  # tracked items whose price on every other realm is looked up each scan (12 requests each)
 SCAN_HOUSES = ("alliance",)  # add "blackwater" to scan the neutral AH and get cross-AH flips back
 USER_AGENT = "ah-helper/0.1"

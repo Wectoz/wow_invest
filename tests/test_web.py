@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from tests.conftest import NOW
-from wow_invest import db, web
+from wow_invest import config, db, web
 from wow_invest.models import Pick, Row
 from wow_invest.pricing import undercut
 from wow_invest.web import build_state, fmt_money, make_server, parse_gold, render_page, safe_icon
@@ -214,7 +214,7 @@ def test_html_security_headers_and_refresh():
 @pytest.fixture
 def server(tmp_path):
     path = str(tmp_path / "t.db")
-    db.connect(path).close()
+    db.set_setting(db.connect(path), "market", "eu/1/alliance")  # past the welcome page: a realm is chosen
     srv = make_server(path, 0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     port = srv.server_address[1]
@@ -300,7 +300,9 @@ def test_refresh_starts_a_forced_scan_and_the_page_says_so(server, monkeypatch):
 def test_loading_bar_resumes_where_the_scan_is():
     st = {**build_state(db.connect(":memory:"), NOW), "scanning": True, "scan_secs": 200, "scan_for": 50.0}
     assert '<div class="bar"><i style="--from:25%;--left:150s">' in render_page(st)
-    assert "--from:97%;--left:1s" in render_page({**st, "scan_for": 999.0})  # overrunning: parked near the end
+    assert "about 3 min left" in render_page(st)  # 150 seconds, rounded up
+    over = render_page({**st, "scan_for": 999.0})
+    assert "--from:97%;--left:1s" in over and "almost done" in over  # overrunning: parked near the end
 
 
 def raw(port, request: bytes):
@@ -574,3 +576,48 @@ def test_a_tracked_item_opens_to_its_price_on_every_realm(server):
     h = req(base + "/?tab=tracked")[1]
     assert "EU · PvP" in h and "your realm" in h and "US · Normal (PvE)" in h and "not listed" in h
     assert h.index("EU · Normal (PvE)") < h.index("EU · PvP") < h.index("US · Normal (PvE)")  # cheapest first
+
+
+def test_first_start_asks_for_realm_gold_and_the_risks_before_anything_else(tmp_path, monkeypatch):
+    path = str(tmp_path / "new.db")
+    c = db.connect(path)
+    srv = make_server(path, 0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    scans = []
+    monkeypatch.setattr(web.scanner, "refresh", scans.append)
+    try:
+        h = req(base + "/")[1]
+        assert "Welcome to WoW Invest" in h and "Reading the list of realms" in h and "Buy in this order" not in h
+        db.set_setting(c, "markets", json.dumps(SITE))
+        h = req(base + "/")[1]
+        assert "You can lose gold" in h and 'action="/setup"' in h and "Choose…" in h and 'name="agree"' in h
+        hdr = {"Content-Type": "application/x-www-form-urlencoded"}
+        form = {"region": "eu", "realm": "1", "faction": "alliance", "gold": "250"}
+        code, h = req(base + "/setup", form, hdr)  # the risks not accepted: nothing is saved
+        assert code == 400 and "Tick the box" in h and "Welcome" in h and db.get_setting(c, "market") is None
+        assert req(base + "/setup", {**form, "agree": "yes", "gold": "lots"}, hdr)[0] == 400
+        assert db.get_setting(c, "market") is None
+        assert req(base + "/setup", {**form, "agree": "yes"}, hdr)[0] == 303
+        assert db.get_setting(c, "market") == "eu/1/alliance" and db.get_gold(c) == 2_500_000 and len(scans) == 1
+        h = req(base + "/")[1]
+        assert "Buy in this order" in h and "Welcome" not in h and "You can lose gold" in h  # the standing note
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_version_is_shown_and_a_newer_one_on_github_offers_an_update(server, monkeypatch):
+    path, base, _ = server
+    c, opened = db.connect(path), []
+    monkeypatch.setattr(web, "__version__", "0.2.0")
+    monkeypatch.setattr(web.webbrowser, "open", opened.append)
+    h = req(base + "/")[1]
+    assert "WoW Invest v0.2.0" in h and "Update to" not in h
+    for same_or_odd in ("0.2.0", "0.1.9", "banana"):
+        db.set_setting(c, "latest_version", same_or_odd)
+        assert "Update to" not in req(base + "/")[1]
+    db.set_setting(c, "latest_version", "0.10.0")  # numbers, not text: 0.10 is newer than 0.2
+    assert "Update to v0.10.0" in req(base + "/")[1]
+    assert req(base + "/update", {}, {"Content-Type": "application/x-www-form-urlencoded"})[0] == 303
+    assert opened == [config.UPDATE_PAGE]
