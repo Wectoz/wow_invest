@@ -563,7 +563,7 @@ SITE = [[r, rs, h, f"{n} Auction House · {t}"] for r in ("eu", "us")
         for h, n in zip(hs, ("Alliance", "Horde", "Blackwater"))]
 
 
-def test_main_realm_is_the_players_choice_and_switching_clears_the_old_realms_prices(server, monkeypatch):
+def test_main_realm_is_the_players_choice_and_switching_sets_the_old_realms_prices_aside(server, monkeypatch):
     path, base, _ = server
     scans = []
     monkeypatch.setattr(web.scanner, "refresh", scans.append)  # a switch starts a scan: not against the real site
@@ -578,7 +578,8 @@ def test_main_realm_is_the_players_choice_and_switching_clears_the_old_realms_pr
     assert req(base + "/realm", {"region": "us", "realm": "2", "faction": "horde"}, hdr)[0] == 303
     assert "Horde · Normal (PvE) · US — Horde AH" in req(base + "/")[1]
     assert db.get_setting(c, "market") == "us/2/horde" and db.get_gold(c) == 5_000_000
-    assert c.execute("SELECT count(*) FROM scans").fetchone()[0] == 0 and len(scans) == 1
+    assert db.last_captured(c, "alliance") is None and len(scans) == 1  # set aside, not deleted
+    assert c.execute("SELECT house FROM scans").fetchone()[0] == "eu/1/alliance|alliance"
     req(base + "/realm", {"region": "us", "realm": "2", "faction": "horde"}, hdr)  # the same realm again: nothing to do
     assert len(scans) == 1
     for bad in ({"region": "xx", "realm": "2", "faction": "horde"}, {"region": "us", "realm": "9", "faction": "horde"},
@@ -673,3 +674,22 @@ def test_every_tab_explains_itself():
     for tip in web.TAB_INFO.values():
         assert f'<a title="{tip}" class="tab' in html
     assert html.count('<i class="info"') == len(web.TABS)
+
+
+def test_page_says_when_the_price_site_refuses_the_program():
+    c = seed(":memory:", [mkpick()])
+    assert "refusing this program" not in state_html(c)
+    db.set_setting(c, "blocked", "1")
+    assert "refusing this program" in state_html(c)
+
+
+def test_a_holding_does_not_change_the_item_type_filter():
+    c = seed(":memory:", [mkpick()])
+    db.set_setting(c, "type", next(iter(web.TYPES)))
+    db.add_holding(c, 1, "flip", 5, 500, 200, NOW, None)
+    assert build_state(c, NOW)["type"] == next(iter(web.TYPES))
+
+
+def test_welcome_page_says_when_the_site_refuses_instead_of_waiting_forever():
+    h = web.welcome_page([], blocked=True)
+    assert "refusing this program" in h and 'http-equiv="refresh"' not in h

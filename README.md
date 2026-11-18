@@ -57,7 +57,7 @@ Other things you can do:
 
 - **You can lose gold.** The program gives suggestions, not guarantees: prices move, other players undercut you, and items can fail to sell.
 - Every profit is an estimate. A pick that held its price did not necessarily sell.
-- Changing your main realm clears the price history gathered so far. Your holdings and settings stay.
+- Each realm keeps its own price history, picks and holdings. Changing your main realm sets them aside, and they come back when you return to it. Your settings stay.
 - The listing-deposit rates are a guess. Check them in game.
 - Your gold, realm and other choices are stored only on your PC.
 

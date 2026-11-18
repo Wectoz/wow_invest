@@ -82,7 +82,7 @@ def test_get_json_4xx_raises_without_retry_and_is_permanent(code):
     c, f, _ = client(http(code))
     with pytest.raises(ApiError) as e:
         c.get_json("/x")
-    assert len(f.calls) == 1 and e.value.transient is False
+    assert len(f.calls) == 1 and e.value.transient is False and e.value.code == code
 
 
 def test_get_json_5xx_after_retries_is_transient():

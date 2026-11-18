@@ -31,6 +31,14 @@ class _Outage(Exception):
     """MAX_ERRORS_IN_ROW requests failed in a row."""
 
 
+def _refused(conn, e) -> bool:
+    """True when the site refuses this program (401/403, it asks for an API key); remembered so the page says so."""
+    if getattr(e, "code", None) not in (401, 403):
+        return False
+    db.set_setting(conn, "blocked", "1")
+    return True
+
+
 def market(conn) -> tuple[str, int, str]:
     """The player's realm: (region, realm type id, faction)."""
     region, ruleset, faction = db.get_setting(conn, "market", c.MARKET_DEFAULT).split("/")
@@ -56,12 +64,15 @@ def use_market(conn, client=None):
     if client is None:
         return None
     raw = client.markets()
+    db.set_setting(conn, "blocked", "0")  # the site answered
     if raw:
         db.set_setting(conn, "markets", json.dumps([[m["region"], m["ruleset_id"], m["house_id"], m.get("name") or ""]
                                                      for m in raw]))
     h = houses_of(known_markets(conn), region, ruleset)
     if h:
         client.houses = {"alliance": h[faction], "blackwater": h["blackwater"]}
+    elif known_markets(conn):  # never scan the default realm under this realm's name
+        raise ApiError(f"the price site does not list realm {region}/{ruleset}", transient=False)
     return raw
 
 
@@ -83,7 +94,7 @@ def compare(client, conn, now, only_new=False):
             except ApiError as e:
                 if isinstance(e, ShapeError):  # the site changed its format: say so, do not call it "not listed"
                     raise
-                if e.transient:  # the site is struggling: keep what we have and try again next scan
+                if e.transient or _refused(conn, e):  # struggling or refusing: keep what we have, try next scan
                     db.set_setting(conn, "compare", json.dumps(seen))
                     return
                 d = None  # not listed there
@@ -183,6 +194,8 @@ def _rep(conn) -> dict:
 
 def _vendor_unit(conn, item_id) -> int | None:
     """Vendor price of one unit, for items with unlimited vendor stock and a known price."""
+    if market(conn)[2] != "alliance":  # the vendor table and city discounts are Alliance's: Horde prices from the AH
+        return None
     s = db.static(conn, item_id)
     if VENDOR_ITEMS.get(item_id, 0) is not None or s is None or s["static_done"] != 1 or not s["purchase_price"]:
         return None
@@ -227,7 +240,9 @@ def run_cycle(client, conn, now, force=False) -> str:
         stale = any([datetime.fromisoformat(times[h][1]) < now - timedelta(hours=c.STALE_HOURS) for h in HOUSES])
     except (ApiError, KeyError, TypeError, ValueError) as e:
         log.warning("scan failed reading the scan times: %r", e)
+        _refused(conn, e)
         return "error"
+    db.set_setting(conn, "stale", "1" if stale else "0")  # also when the site has no newer scan
     if not force and all(times[h][0] == db.last_captured(conn, h) for h in HOUSES):
         try:
             compare(client, conn, now, only_new=True)
@@ -242,7 +257,6 @@ def run_cycle(client, conn, now, force=False) -> str:
         return "error"
     cut = {h: deals[h][1] for h in HOUSES}
     scan_id = {h: db.save_scan(conn, h, *times[h], cut[h], rows[h]) for h in HOUSES}
-    db.set_setting(conn, "stale", "1" if stale else "0")
     if stale:
         tracker.judge(conn, now)
         return "stale"
@@ -259,7 +273,7 @@ def run_cycle(client, conn, now, force=False) -> str:
             try:
                 cache[key], errors = client.item_detail(house, item_id, cut[house]), 0
             except ApiError as e:
-                if isinstance(e, ShapeError):  # every other item would fail the same way
+                if isinstance(e, ShapeError) or _refused(conn, e):  # every other item would fail the same way
                     raise _Outage from e
                 if e.transient:
                     errors += 1
@@ -382,7 +396,12 @@ def loop(client_factory, db_path, stop):
                 # first start: nothing is scanned until the player has picked a realm on the welcome page,
                 # which needs the list of realms the site covers
                 if not known_markets(conn):
-                    use_market(conn, client)
+                    try:
+                        use_market(conn, client)
+                    except ApiError as e:
+                        log.warning("could not read the list of realms: %r", e)
+                        if _refused(conn, e):
+                            stop.wait(600)  # do not knock every five seconds on a site that said no
                 stop.wait(5)
                 continue
             # a cycle that failed after saving its scan would otherwise read as "no-change" until the next scan

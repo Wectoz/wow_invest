@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 
 from tests.conftest import NOW
-from wow_invest import db
+from wow_invest import config, db
 from wow_invest.models import Detail, Pick, Row
 
 
@@ -188,3 +188,35 @@ def test_crowd_drift_is_levels_per_day_over_our_scans():
     db.save_scan(c, "alliance", iso(NOW), iso(NOW), 0.05, [gear(1, 20), gear(2, 24)])
     assert db.crowd_drift(c, NOW) == pytest.approx(1.0)  # mean level 20 → 22 in two days
     assert db.crowd_drift(c, NOW + timedelta(days=6)) is None  # under a day of scans left in the week
+
+
+def test_selling_a_sold_holding_again_keeps_the_first_sale():
+    c = db.connect(":memory:")
+    a = db.add_holding(c, 1, "flip", 5, 500, 200, NOW, None)
+    db.mark_sold(c, a, NOW, 200)
+    db.mark_sold(c, a, NOW)
+    assert c.execute("SELECT sold_price FROM holdings WHERE id=?", (a,)).fetchone()[0] == 200
+
+
+def test_each_realm_keeps_its_own_scans_picks_and_holdings_across_a_switch():
+    c = db.connect(":memory:")
+    db.set_setting(c, "market", "eu/1/alliance")
+    db.save_scan(c, "alliance", NOW.isoformat(), NOW.isoformat(), 0.05, [])
+    db.set_setting(c, "crowd", "10-20")
+    db.add_holding(c, 1, "flip", 5, 500, 200, NOW, None)
+    db.switch_market(c, "us/2/horde")
+    assert db.last_captured(c, "alliance") is None and db.get_setting(c, "crowd") is None
+    assert db.open_holdings(c) == [] and db.held_units(c) == {}
+    db.add_holding(c, 2, "flip", 1, 100, 200, NOW, None)
+    db.switch_market(c, "eu/1/alliance")
+    assert db.last_captured(c, "alliance") == NOW.isoformat() and db.get_setting(c, "crowd") == "10-20"
+    assert [h.item_id for h in db.open_holdings(c)] == [1]
+    assert [r[0] for r in c.execute("SELECT market FROM holdings ORDER BY id")] == ["eu/1/alliance", "us/2/horde"]
+
+
+def test_data_from_before_realms_existed_stays_when_its_own_realm_is_chosen():
+    c = db.connect(":memory:")
+    db.save_scan(c, "alliance", NOW.isoformat(), NOW.isoformat(), 0.05, [])
+    db.add_holding(c, 1, "flip", 5, 500, 200, NOW, None)
+    db.switch_market(c, config.LEGACY_MARKET)
+    assert db.last_captured(c, "alliance") == NOW.isoformat() and len(db.open_holdings(c)) == 1

@@ -15,9 +15,10 @@ log = logging.getLogger(__name__)
 
 
 class ApiError(Exception):
-    def __init__(self, msg="", transient=True):
+    def __init__(self, msg="", transient=True, code=None):
         super().__init__(msg)
         self.transient = transient  # False: retrying will not help (4xx, wrong shape)
+        self.code = code  # the HTTP status, when the site answered with one
 
 
 class ShapeError(ApiError):
@@ -42,7 +43,8 @@ def parse_row(d):
         required_level=d.get("required_level") if d.get("required_level") is not None else level,
         item_level=d.get("item_level"),
         min_ask=_int(d.get("minimum_ask_copper")), avg_ask=_int(d.get("average_ask_copper")),
-        units=d.get("units") or 0, listings=d.get("listings") or 0, sold_24h=d["early_removed_24h"] or 0,
+        # int(): these reach the page as numbers, so text from the site fails the scan instead
+        units=int(d.get("units") or 0), listings=int(d.get("listings") or 0), sold_24h=int(d["early_removed_24h"] or 0),
         vendor_sell=_int(d.get("vendor_sell_copper")),
     )
 
@@ -89,8 +91,8 @@ class Client:
             try:
                 return json.loads(self._fetch(url, {"User-Agent": config.USER_AGENT}))
             except urllib.error.HTTPError as e:
-                if e.code == 404 or not (e.code == 429 or e.code >= 500):
-                    raise ApiError(f"HTTP {e.code} for {path}", transient=False) from e
+                if not (e.code == 429 or e.code >= 500):
+                    raise ApiError(f"HTTP {e.code} for {path}", transient=False, code=e.code) from e
                 ra = e.headers.get("Retry-After") if e.headers else None
                 retry_after = min(int(ra), config.RETRY_AFTER_MAX_S) if ra and ra.isdigit() else None
                 err = e

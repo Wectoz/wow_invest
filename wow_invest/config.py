@@ -5,6 +5,7 @@ BASE_URL = "https://blackwater.exchange"
 # program the player's own house is always called "alliance" and the neutral one "blackwater": names from
 # when it knew a single realm. HOUSES and HOUSE_NAMES are pointed at the chosen realm when a scan starts.
 MARKET_DEFAULT = "eu/1/alliance"  # the first realm the site lists, until the player picks theirs
+LEGACY_MARKET = "eu/2/alliance"  # the one realm the program knew before realms could be chosen
 HOUSES = {"alliance": "eu/1/110", "blackwater": "eu/1/116"}
 HOUSE_NAMES = {"alliance": "Alliance", "blackwater": "Blackwater"}
 FACTIONS = ("alliance", "horde", "blackwater")  # a realm's three houses, in the order of the site's house ids

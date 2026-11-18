@@ -5,7 +5,7 @@ from dataclasses import asdict, fields
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from wow_invest.config import PROVEN_RECENT
+from wow_invest.config import LEGACY_MARKET, PROVEN_RECENT
 from wow_invest.models import Detail, Holding, Pick, Row
 
 _PICK_FIELDS = {f.name for f in fields(Pick)}
@@ -20,11 +20,15 @@ CREATE TABLE IF NOT EXISTS items(item_id INTEGER PRIMARY KEY, name, icon, qualit
   static_done INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS picks(id INTEGER PRIMARY KEY, created_at TEXT, kind TEXT,
   item_id INTEGER, sell_at TEXT, qty INTEGER, cost INTEGER, sell_price INTEGER,
-  profit INTEGER, sell_by TEXT, judged_at TEXT, hit INTEGER);
+  profit INTEGER, sell_by TEXT, judged_at TEXT, hit INTEGER, market TEXT);
 CREATE TABLE IF NOT EXISTS holdings(id INTEGER PRIMARY KEY, item_id INTEGER, kind TEXT,
-  qty INTEGER, price_paid INTEGER, target INTEGER, bought_at TEXT, sell_by TEXT, sold_at TEXT, sell_at TEXT NOT NULL DEFAULT 'alliance');
+  qty INTEGER, price_paid INTEGER, target INTEGER, bought_at TEXT, sell_by TEXT, sold_at TEXT, sell_at TEXT NOT NULL DEFAULT 'alliance', sold_price INTEGER, market TEXT);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 """
+# Holdings and picks carry the realm they were made on (region/realm type/faction); the page and the scan
+# only see those of the realm chosen now. NULL matches while no realm is chosen yet.
+_HERE = "(SELECT value FROM settings WHERE key='market')"
+_PER_MARKET = ("candidates", "crowd", "drift", "stale", "compare")  # settings that describe one realm
 
 
 def connect(path: str) -> sqlite3.Connection:
@@ -38,6 +42,11 @@ def connect(path: str) -> sqlite3.Connection:
         conn.execute("ALTER TABLE holdings ADD COLUMN sell_at TEXT NOT NULL DEFAULT 'alliance'")
     if "sold_price" not in {r[1] for r in conn.execute("PRAGMA table_info(holdings)")}:
         conn.execute("ALTER TABLE holdings ADD COLUMN sold_price INTEGER")  # per unit, as the user reports it
+    for t in ("holdings", "picks"):
+        if "market" not in {r[1] for r in conn.execute(f"PRAGMA table_info({t})")}:
+            with conn:
+                conn.execute(f"ALTER TABLE {t} ADD COLUMN market TEXT")
+                conn.execute(f"UPDATE {t} SET market = {_HERE}")
     return conn
 
 
@@ -169,14 +178,24 @@ def get_setting(conn, key, default=None):
     return r[0] if r else default
 
 
-def clear_market(conn):
-    """Forget everything gathered about the realm scanned so far: its prices must not mix with another realm's.
-    Holdings, judged picks and the player's settings stay."""
+def switch_market(conn, new: str):
+    """Make `new` (region/realm type/faction) the player's realm. Nothing is deleted: the old realm's scans,
+    picks and holdings are set aside under its name and come back when it is chosen again, so one realm's
+    prices never mix with another's."""
+    old = get_setting(conn, "market") or LEGACY_MARKET  # data from before realms could be chosen is that realm's
     with conn:
-        conn.execute("DELETE FROM snapshots")
-        conn.execute("DELETE FROM scans")
-        conn.execute("DELETE FROM picks WHERE judged_at IS NULL")
-        conn.execute("DELETE FROM settings WHERE key IN ('candidates', 'crowd', 'drift', 'stale', 'compare')")
+        for t in ("holdings", "picks"):
+            conn.execute(f"UPDATE {t} SET market=? WHERE market IS NULL", (old,))
+        if old != new:
+            # a set-aside scan's house reads "region/type/faction|house"; the live realm's is the bare house
+            conn.execute("UPDATE scans SET house = ? || '|' || house WHERE instr(house, '|') = 0", (old,))
+            conn.execute("UPDATE scans SET house = substr(house, ?) WHERE substr(house, 1, ?) = ?",
+                         (len(new) + 2, len(new) + 1, new + "|"))
+            for k in _PER_MARKET:
+                conn.execute("DELETE FROM settings WHERE key=?", (f"{k}@{old}",))
+                conn.execute("UPDATE settings SET key=? WHERE key=?", (f"{k}@{old}", k))
+                conn.execute("UPDATE settings SET key=? WHERE key=?", (k, f"{k}@{new}"))
+        conn.execute("INSERT OR REPLACE INTO settings VALUES('market', ?)", (new,))
 
 
 def get_gold(conn) -> int:
@@ -190,8 +209,8 @@ def set_gold(conn, copper: int):
 def add_holding(conn, item_id, kind, qty, price_paid, target, now, sell_by, sell_at="alliance") -> int:
     with conn:
         return conn.execute(
-            "INSERT INTO holdings(item_id, kind, qty, price_paid, target, bought_at, sell_by, sell_at) "
-            "VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO holdings(item_id, kind, qty, price_paid, target, bought_at, sell_by, sell_at, market) "
+            f"VALUES(?,?,?,?,?,?,?,?,{_HERE})",
             (item_id, kind, qty, price_paid, target, _iso(now), _iso(sell_by), sell_at)).lastrowid
 
 
@@ -200,15 +219,17 @@ def mark_sold(conn, holding_id, now, price: int | None = None, qty: int | None =
     was paid, and the rest stays held. So one purchase can be sold in batches at different prices."""
     with conn:
         h = conn.execute("SELECT * FROM holdings WHERE id=? AND sold_at IS NULL", (holding_id,)).fetchone()
-        if h is None or qty is None or qty >= h["qty"]:
+        if h is None:  # already sold: a repeated click must not rewrite the sale
+            return
+        if qty is None or qty >= h["qty"]:
             conn.execute("UPDATE holdings SET sold_at=?, sold_price=? WHERE id=?", (_iso(now), price, holding_id))
             return
         part = round(h["price_paid"] * qty / h["qty"])
         conn.execute(
             "INSERT INTO holdings(item_id, kind, qty, price_paid, target, bought_at, sell_by, sell_at, sold_at, "
-            "sold_price) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "sold_price, market) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (h["item_id"], h["kind"], qty, part, h["target"], h["bought_at"], h["sell_by"], h["sell_at"],
-             _iso(now), price))
+             _iso(now), price, h["market"]))
         conn.execute("UPDATE holdings SET qty=?, price_paid=? WHERE id=?",
                      (h["qty"] - qty, h["price_paid"] - part, holding_id))
 
@@ -224,12 +245,12 @@ def real_results(conn, cut: float) -> dict[str, tuple[int, int]]:
 def open_holdings(conn) -> list[Holding]:
     return [Holding(r["id"], r["item_id"], r["kind"], r["qty"], r["price_paid"], r["target"],
                     _dt(r["bought_at"]), _dt(r["sell_by"]), None, r["sell_at"])
-            for r in conn.execute("SELECT * FROM holdings WHERE sold_at IS NULL ORDER BY id")]
+            for r in conn.execute(f"SELECT * FROM holdings WHERE sold_at IS NULL AND market IS {_HERE} ORDER BY id")]
 
 
 def held_units(conn) -> dict[int, int]:
     return {r[0]: r[1] for r in conn.execute(
-        "SELECT item_id, sum(qty) FROM holdings WHERE sold_at IS NULL GROUP BY item_id")}
+        f"SELECT item_id, sum(qty) FROM holdings WHERE sold_at IS NULL AND market IS {_HERE} GROUP BY item_id")}
 
 
 def save_candidates(conn, picks: list[Pick], captured_at: str):
@@ -261,12 +282,12 @@ def record_picks(conn, picks: list[Pick], now) -> int:
     n = 0
     with conn:
         for p in picks:
-            if conn.execute("SELECT 1 FROM picks WHERE item_id=? AND kind=? AND judged_at IS NULL",
+            if conn.execute(f"SELECT 1 FROM picks WHERE item_id=? AND kind=? AND judged_at IS NULL AND market IS {_HERE}",
                             (p.item_id, p.kind)).fetchone():
                 continue
             conn.execute(
                 "INSERT INTO picks(created_at, kind, item_id, sell_at, qty, cost, sell_price, "
-                "profit, sell_by) VALUES(?,?,?,?,?,?,?,?,?)",
+                f"profit, sell_by, market) VALUES(?,?,?,?,?,?,?,?,?,{_HERE})",
                 (_iso(now), p.kind, p.item_id, p.sell_at, p.qty, p.cost, p.sell_price,
                  p.profit, _iso(p.sell_by)))
             n += 1
@@ -274,7 +295,7 @@ def record_picks(conn, picks: list[Pick], now) -> int:
 
 
 def open_picks(conn) -> list[sqlite3.Row]:
-    return conn.execute("SELECT * FROM picks WHERE judged_at IS NULL ORDER BY id").fetchall()
+    return conn.execute(f"SELECT * FROM picks WHERE judged_at IS NULL AND market IS {_HERE} ORDER BY id").fetchall()
 
 
 def judge_pick(conn, pick_id, hit: bool, now):

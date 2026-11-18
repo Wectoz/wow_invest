@@ -208,11 +208,11 @@ def build_state(conn, now: datetime, q: str = "") -> dict:
         it = db.static(conn, h.item_id)
         cut, prices = houses[h.sell_at]
         cur = prices.get(h.item_id, (None,))[0]
-        kind, price = sell_advice(h, cur, cut, now)
+        advice, price = sell_advice(h, cur, cut, now)
         loss = max(0, math.ceil(h.price_paid / h.qty / (1 - cut)) - (price or 0)) * h.qty
         held.append({"h": h, "name": it["name"] if it else None, "icon": it["icon"] if it else None,
                      "quality": it["quality"] if it else None, "current": cur,
-                     "kind": kind, "price": price, "loss": loss})
+                     "kind": advice, "price": price, "loss": loss})
     p = plan(fresh, db.get_gold(conn), holdings, holds_proven(stats), floor, unit_floor)
     oldest = conn.execute("SELECT min(captured_at) FROM scans WHERE house='alliance'").fetchone()[0]
     history_ok = bool(oldest) and now - _aware(oldest) >= timedelta(hours=C.MIN_HISTORY_HOURS)
@@ -220,7 +220,7 @@ def build_state(conn, now: datetime, q: str = "") -> dict:
     auctions = _aware(ali["auctions_at"]) if ali else None
     return {
         "gold": db.get_gold(conn), "plan": p, "holdings": held, "stats": stats,
-        "crowd": db.get_setting(conn, "crowd"), "stale": db.get_setting(conn, "stale") == "1",
+        "crowd": db.get_setting(conn, "crowd"), "stale": db.get_setting(conn, "stale") == "1", "blocked": db.get_setting(conn, "blocked") == "1",
         "gathering": not cands and not history_ok, "scanning": scanner.busy.locked(),
         # the loading bar is paced by how long the last full scan took
         "scan_secs": int(db.get_setting(conn, "scan_secs", "360")), "scan_for": time.time() - scanner.started,
@@ -251,6 +251,10 @@ def _realm_name(markets, ruleset) -> str:
     return names[0].replace(" (provisional)", "") if names else f"Realm type {ruleset}"
 
 
+BLOCKED = ("The price site (blackwater.exchange) is refusing this program: it now asks programs for an API "
+           "key. No new prices can be read until that is sorted out.")
+
+
 def _set_realm(conn, f, now):
     ms = scanner.known_markets(conn)
     region, faction = f.get("region"), f.get("faction")
@@ -260,8 +264,13 @@ def _set_realm(conn, f, now):
     new = f"{region}/{ruleset}/{faction}"
     if new == db.get_setting(conn, "market"):
         return
-    db.clear_market(conn)
-    db.set_setting(conn, "market", new)
+    # a scan still running would save the old realm's prices under the new one
+    if not scanner.busy.acquire(blocking=False):
+        raise ValueError("A scan is running. Change realm when it has finished")
+    try:
+        db.switch_market(conn, new)
+    finally:
+        scanner.busy.release()
     _refresh(conn, f, now)
 
 
@@ -293,7 +302,8 @@ def _setup(conn, f, now):
     db.set_gold(conn, gold)
 
 
-def welcome_page(markets: list, error: str | None = None, css_href: str = "/static/style.css") -> str:
+def welcome_page(markets: list, error: str | None = None, css_href: str = "/static/style.css",
+                 blocked: bool = False) -> str:
     """Shown instead of the program until a realm is chosen: realm, gold and the risks to accept."""
     ban = f'<div class="banner err">{esc(error)}</div>' if error else ""
     if markets:
@@ -305,6 +315,8 @@ def welcome_page(markets: list, error: str | None = None, css_href: str = "/stat
                 '<label class="agree"><input type="checkbox" name="agree" value="yes" required> I understand that '
                 'I can lose gold by following these suggestions.</label><button>Start</button></form>')
         wait = ""
+    elif blocked:
+        body, wait = f'<div class="empty">{esc(BLOCKED)}</div>', ""
     else:  # the scanner is fetching the list right now: look again shortly
         body = '<div class="empty">Reading the list of realms from the price site… This takes a few seconds.</div>'
         wait = '<meta http-equiv="refresh" content="3">'
@@ -324,8 +336,8 @@ def _realm_form(m: dict) -> str:
         return ""
     return ('<details class="filters realm"><summary>Change realm</summary><form class="controls" method="post" '
             f'action="/realm">{_realm_selects(ms, *m["main"])}<button>Make this my main realm</button></form><div class="sub">Picks, prices and scans follow '
-            'your main realm. Changing it clears the price history gathered so far, and new picks need a scan (a few '
-            'minutes). Your holdings and settings stay.</div></details>')
+            'your main realm. Each realm keeps its own price history, picks and holdings, which come back when you return to it. New picks need a scan (a few '
+            'minutes). Your settings stay.</div></details>')
 
 
 def route(p) -> str:
@@ -603,6 +615,8 @@ def render_page(state: dict, error: str | None = None, css_href: str = "/static/
     if state["gathering"]:
         ban.append('<div class="banner">Gathering price history… Picks can appear after the first scan cycle '
                    '(a few minutes), since the site already keeps price history. Holds need about a day of scans.</div>')
+    if state["blocked"]:
+        ban.append(f'<div class="banner err">{esc(BLOCKED)} Showing the last good data.</div>')
     if state["stale"]:
         ban.append('<div class="banner">Site data is stale: the auction snapshot is old, so no new picks are saved.</div>')
     if state["scan_age_min"] is not None and state["scan_age_min"] > 90:
@@ -786,7 +800,7 @@ class Handler(BaseHTTPRequestHandler):
         conn = db.connect(self.server.db_path)
         try:
             if db.get_setting(conn, "market") is None:  # first start: nothing to show until a realm is chosen
-                html = welcome_page(scanner.known_markets(conn), error)
+                html = welcome_page(scanner.known_markets(conn), error, blocked=db.get_setting(conn, "blocked") == "1")
             else:
                 html = render_page(build_state(conn, datetime.now(UTC), q), error, tab=tab, page=page)
         finally:

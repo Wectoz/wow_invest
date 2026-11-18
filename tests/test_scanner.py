@@ -546,3 +546,36 @@ def test_scan_follows_the_players_realm_and_compares_tracked_items_across_realms
     assert rows == [["eu", 1, 12000, 115, 48], ["eu", 2, None, 0, 0], ["us", 1, None, 0, 0], ["us", 2, None, 0, 0]]
     fc.fail.add(FLIP)  # the site struggling later keeps what was learned
     assert run_cycle(fc, conn, NOW, force=True) == "error" or json.loads(db.get_setting(conn, "compare"))[str(FLIP)]["rows"] == rows
+
+
+def test_a_site_that_refuses_the_program_is_remembered_until_it_answers_again(tmp_path):
+    conn = db.connect(str(tmp_path / "w.db"))
+
+    class Refused(FakeClient):
+        def scan_times(self, markets=None):
+            raise ApiError("HTTP 403 for /v1/markets", transient=False, code=403)
+
+    assert run_cycle(Refused([]), conn, NOW) == "error" and db.get_setting(conn, "blocked") == "1"
+    run_cycle(FakeClient([]), conn, NOW)
+    assert db.get_setting(conn, "blocked") == "0"
+
+
+def test_details_the_site_refuses_stop_the_scan_and_mark_no_item_bad():
+    conn = db.connect(":memory:")
+
+    class Refused(FakeClient):
+        def item_detail(self, house, item_id, cut):
+            raise ApiError("HTTP 403", transient=False, code=403)
+
+    c = Refused([row(FLIP)], deals=[FLIP])
+    assert run_cycle(c, conn, NOW) == "error" and db.get_setting(conn, "blocked") == "1"
+    assert not conn.execute("SELECT 1 FROM items WHERE static_done=-1").fetchone()
+
+
+def test_horde_gets_no_price_from_the_alliance_vendor_table():
+    conn = db.connect(":memory:")
+    item = next(i for i, stock in VENDOR_ITEMS.items() if stock is None)
+    db.save_static(conn, detail(item, purchase_price=500))
+    assert scanner._vendor_unit(conn, item)
+    db.set_setting(conn, "market", "us/2/horde")
+    assert scanner._vendor_unit(conn, item) is None
